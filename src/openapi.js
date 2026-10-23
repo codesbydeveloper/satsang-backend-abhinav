@@ -74,13 +74,19 @@ module.exports = {
       responses: { 202: ok('Deletion request filed (or the already-pending one returned); a Full Admin approves it', ref('DeletionRequestFiled')), ...errors(401, 429) } }) },
 
     '/auth/register': { post: op('Auth', 'Create an adult/independent or parent account and email a verification code', {
+      description: 'Independent ("adult") accounts send only their date of birth (`dob`) here: a neutral age gate asked '
+        + 'before anything else. Under the regional consent age (PARENTAL_CONSENT_AGE) the answer is 400 '
+        + '`PARENT_ACCOUNT_REQUIRED` and nothing is stored (this check runs before the email check). The username and '
+        + 'avatar are chosen after email verification with POST /me/profile. The older one-step `profile` object is still '
+        + 'accepted instead of `dob`. Parent accounts send `confirmAdult: true` and no date of birth.',
       requestBody: body(obj({
         email: str(), password: str({ description: '8–72 chars, at least one letter and one number' }), accountType: str({ enum: ['adult', 'parent'] }),
         phone: str({ description: 'Optional contact only — never used to log in' }), language: str({ enum: ['en', 'gu'] }),
         acceptPrivacyPolicy: { type: 'boolean', enum: [true] }, confirmAdult: { type: 'boolean', description: 'Required for parent accounts' },
+        dob: str({ format: 'date', description: 'Independent accounts: date of birth (YYYY-MM-DD). Never returned by the API. Not accepted for parents.' }),
         profile: obj({ username: str(), avatarId: int(), dob: str({ format: 'date' }), mode: str({ enum: ['sanatan', 'satsang'] }) }, ['username', 'avatarId', 'dob']),
       }, ['email', 'password', 'accountType', 'acceptPrivacyPolicy'])),
-      responses: { 201: ok('Account created, verification email sent'), ...errors(400, 409, 429) } }) },
+      responses: { 201: ok('Account created, verification email sent', obj({ needsEmailVerification: { type: 'boolean' }, email: str() })), ...errors(400, 409, 429) } }) },
     '/auth/verify-email': { post: op('Auth', 'Confirm the 6-digit email code and start a session', {
       requestBody: body(obj({ email: str(), code: str() }, ['email', 'code'])), responses: { 200: ok('Logged in', ref('AuthResponse')), ...errors(400, 429) } }) },
     '/auth/resend-code': { post: op('Auth', 'Send a new verification code (always answers ok)', { requestBody: body(obj({ email: str() }, ['email'])), responses: { 200: ok('ok'), ...errors(429) } }) },
@@ -99,6 +105,13 @@ module.exports = {
       delete: op('Account', 'Ask for the account to be deleted (password check). Files a deletion request; once a Full Admin approves it the account is deleted, and for a parent account every child profile too. Repeating the call returns the pending request.', {
         security: user, requestBody: body(obj({ password: str(), confirm: { type: 'boolean', enum: [true] } }, ['password', 'confirm'])), responses: { 202: ok('Deletion request filed', ref('DeletionRequestFiled')), ...errors(400, 401) } }),
     },
+    '/me/profile': { post: op('Account', 'Independent accounts: create your own playable profile (once, after email verification)', {
+      description: 'Uses the date of birth given at registration (it then lives on the profile only), makes the new profile '
+        + 'active on this device session and returns an access token for it. Errors: 403 `INDEPENDENT_ONLY` (parent accounts '
+        + 'use POST /profiles), 409 `PROFILE_EXISTS`, 400 `USERNAME_*`, `DOB_MISSING`, `PARENT_ACCOUNT_REQUIRED`.',
+      security: user,
+      requestBody: body(obj({ username: str({ description: '3–20 letters (any script), digits, _ or .' }), avatarId: int({ description: '1–16' }), mode: str({ enum: ['sanatan', 'satsang'] }) }, ['username', 'avatarId'])),
+      responses: { 201: ok('Profile created and active', obj({ accessToken: str(), activeProfileId: int(), profile: ref('Profile') })), ...errors(400, 401, 403, 409) } }) },
     '/me/change-password': { post: op('Account', 'Change password; other devices are logged out and this device gets fresh tokens', {
       security: user, requestBody: body(obj({ currentPassword: str(), newPassword: str() }, ['currentPassword', 'newPassword'])), responses: { 200: ok('New session', ref('AuthResponse')), ...errors(400, 401) } }) },
 

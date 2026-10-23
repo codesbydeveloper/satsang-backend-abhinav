@@ -30,22 +30,32 @@ const registerSchema = z.object({
   language: S.language.default('en'),
   acceptPrivacyPolicy: z.literal(true, { error: 'You must accept the privacy policy' }),
   confirmAdult: z.boolean().optional(),                       // parents confirm they are 18+
-  profile: z.object({                                         // adult accounts only: their own playable profile
+  // Independent ("adult") accounts: date of birth only. Username and avatar come later (POST /me/profile).
+  dob: S.dob.optional(),
+  // Older one-step form for independent accounts (username, avatar and dob together). Still accepted.
+  profile: z.object({
     username: S.username, avatarId: S.avatarId, dob: S.dob, mode: S.mode.optional(),
   }).optional(),
 }).superRefine((v, ctx) => {
-  if (v.accountType === 'adult' && !v.profile) ctx.addIssue({ code: 'custom', path: ['profile'], message: 'Profile (username, avatar, date of birth) is required' });
+  if (v.accountType === 'adult' && !v.dob && !v.profile) ctx.addIssue({ code: 'custom', path: ['dob'], message: 'Date of birth is required' });
+  if (v.accountType === 'adult' && v.dob && v.profile) ctx.addIssue({ code: 'custom', path: ['dob'], message: 'Send either dob or profile, not both' });
   if (v.accountType === 'parent' && v.profile) ctx.addIssue({ code: 'custom', path: ['profile'], message: 'Parent accounts add child profiles after signing up' });
+  if (v.accountType === 'parent' && v.dob) ctx.addIssue({ code: 'custom', path: ['dob'], message: 'Parent accounts do not give a date of birth' });
   if (v.accountType === 'parent' && v.confirmAdult !== true) ctx.addIssue({ code: 'custom', path: ['confirmAdult'], message: 'Parents must confirm they are 18 or older' });
 });
 
+// Neutral wording: never reveals the cut-off age (contract 4.1).
+const PARENT_ACCOUNT_MESSAGE = 'Please ask a parent to create a Parent account for you.';
+
 router.post('/register', authLimiter, validate(registerSchema), async (req, res) => {
   const b = req.body;
+  if (b.accountType === 'adult') {
+    // Age gate first, before anything else is looked at or stored: under the regional consent age the user needs a
+    // parent account. Nothing is saved and nothing is revealed (not even whether the email is registered).
+    const dob = b.profile ? b.profile.dob : b.dob;
+    if (ageOn(dob) < config.parentalConsentAge) throw badRequest('PARENT_ACCOUNT_REQUIRED', PARENT_ACCOUNT_MESSAGE);
+  }
   if (b.profile) {
-    // independent users must be old enough to hold their own account; younger children use a parent account
-    if (ageOn(b.profile.dob) < config.parentalConsentAge) {
-      throw badRequest('PARENT_ACCOUNT_REQUIRED', `Users under ${config.parentalConsentAge} need a parent account to create their profile.`);
-    }
     const u = await checkUsername(b.profile.username);
     if (!u.ok) throw badRequest('USERNAME_' + u.reason, 'That username cannot be used');
   }
@@ -54,9 +64,11 @@ router.post('/register', authLimiter, validate(registerSchema), async (req, res)
   const hash = await bcrypt.hash(b.password, config.bcryptRounds);
   const accountId = await tx(async (c) => {
     const r = await c.query(
-      `INSERT INTO accounts (email, password_hash, account_type, phone, preferred_language, privacy_policy_version, consent_accepted_at)
-       VALUES (?,?,?,?,?,?,UTC_TIMESTAMP())`,
-      [b.email, hash, b.accountType, b.phone || null, b.language, config.privacyPolicyVersion]);
+      `INSERT INTO accounts (email, password_hash, account_type, phone, preferred_language, dob, privacy_policy_version, consent_accepted_at)
+       VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP())`,
+      // the dob waits on the account only until POST /me/profile creates the profile (it is then cleared)
+      [b.email, hash, b.accountType, b.phone || null, b.language, b.accountType === 'adult' && !b.profile ? b.dob : null,
+        config.privacyPolicyVersion]);
     if (b.profile) {
       const p = b.profile;
       await c.query(
