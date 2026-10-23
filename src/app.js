@@ -30,6 +30,8 @@ function createApp() {
   api.use('/admin/users', require('./routes/admin/users'));
   api.use('/admin/blocked-words', require('./routes/admin/blockedWords'));
   api.use('/admin/audit-log', require('./routes/admin/auditLog'));
+  api.use('/admin/dashboard', require('./routes/admin/dashboard'));
+  api.use('/admin/deletion-requests', require('./routes/admin/deletionRequests'));
   app.use('/api/v1', api);
 
   app.get('/api-docs.json', (_req, res) => res.json(openapi));

@@ -30,7 +30,7 @@ The first Full Admin sets up an authenticator app (Google Authenticator, Authy, 
 ```bash
 cp .env.test.example .env.test   # a SEPARATE database whose name ends in _test (tests wipe its tables)
 NODE_ENV=test npm run migrate
-npm test                         # 34 tests: auth, profiles, Parent PIN, deletion, admin roles/2FA/audit
+npm test                         # 42 tests: auth, profiles, Parent PIN, deletion, admin roles/2FA/audit
 ```
 On Windows use `set NODE_ENV=test&& npm run migrate` (cmd) or `$env:NODE_ENV="test"; npm run migrate` (PowerShell).
 
@@ -55,6 +55,7 @@ test/               automated tests
 - **Parent mode.** A parent logs in "in parent mode". Switching to a child (`POST /profiles/:id/switch`) and coming back (`POST /profiles/parent-mode`) both need the 4-digit Parent PIN. Five wrong PINs lock it for 15 minutes; resetting it with the account password clears the lock.
 - **Age groups** follow contract Section 3.3 and are recomputed from DOB (Eastern Time) on every profile load and every 6 hours. An admin override wins until it is cleared. DOB is returned only to the profile's own account.
 - **Usernames:** 3–20 characters, letters in any script (Gujarati works), digits, `_` and `.`; unique ignoring case; checked against the admin-managed blocked/reserved list with look-alike handling (`sh1t` ≈ `shit`).
+- **Account deletion requests:** `DELETE /me` (app) and `POST /public/delete-account` (web page) file a request (202) instead of deleting. A Full Admin approves it (the account is deleted) or rejects it with a reason in Admin → Deletion requests. Request rows store no email or username, so nothing personal is kept after deletion. Child-profile deletion by a parent is still immediate.
 - **Deletion:** database foreign keys cascade, so deleting a profile or account removes everything attached to it, now and for tables added in later milestones (new profile-owned tables must use `ON DELETE CASCADE` on `profile_id`).
 - **Admin login:** password → authenticator code → admin token (8 h). A step token can only be used for the 2FA calls. Five failures lock the admin for 15 minutes. Every admin action is written to `audit_log` (read-only through the API).
 

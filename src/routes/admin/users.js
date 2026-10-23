@@ -4,7 +4,7 @@ const { query } = require('../../db');
 const validate = require('../../middleware/validate');
 const { requireAdmin, requireRole } = require('../../middleware/adminAuth');
 const { notFound } = require('../../utils/errors');
-const { AGE_GROUP_KEYS, ageGroupForDob } = require('../../utils/ageGroup');
+const { AGE_GROUP_KEYS, ageGroupForDob, ageOn } =require('../../utils/ageGroup');
 const { audit } = require('../../utils/audit');
 
 const router = express.Router();
@@ -28,13 +28,42 @@ router.get('/', validate(z.object({ q: z.string().trim().max(100).default(''), p
     profileId: r.profile_id, username: r.username, ageGroup: r.age_group, ageGroupOverridden: !!r.age_group_override, isChild: !!r.is_child })) });
 });
 
+// The "View" page: one account with all its playable profiles. Never returns the password or Parent PIN hashes.
 router.get('/:accountId', validate(z.object({ accountId: z.coerce.number().int().positive() }), 'params'), async (req, res) => {
-  const a = (await query('SELECT id, email, account_type, phone, preferred_language, email_verified_at, created_at FROM accounts WHERE id = ?', [req.validated.params.accountId]))[0];
+  const a = (await query(`SELECT id, email, account_type, phone, preferred_language, email_verified_at, parent_pin_hash IS NOT NULL AS pin_set,
+                                 privacy_policy_version, consent_accepted_at, created_at FROM accounts WHERE id = ?`, [req.validated.params.accountId]))[0];
   if (!a) throw notFound('ACCOUNT_NOT_FOUND', 'Account not found');
-  const profiles = await query('SELECT id, username, avatar_id, dob, age_group, age_group_override, is_child, language, mode, created_at FROM profiles WHERE account_id = ? ORDER BY id', [a.id]);
+  const profiles = await query(
+    `SELECT p.id, p.username, p.avatar_id, av.avatar_key, p.dob, p.age_group, p.age_group_override, p.is_child, p.language, p.mode, p.created_at
+       FROM profiles p JOIN avatars av ON av.id = p.avatar_id WHERE p.account_id = ? ORDER BY p.id`, [a.id]);
   await audit(req, 'user.viewed', { entityType: 'account', entityId: a.id });
-  res.json({ account: a, profiles });
+  res.json({
+    account: {
+      id: a.id, email: a.email, accountType: a.account_type, phone: a.phone, language: a.preferred_language,
+      emailVerified: !!a.email_verified_at, emailVerifiedAt: a.email_verified_at, parentPinSet: !!a.pin_set,
+      privacyPolicyVersion: a.privacy_policy_version, consentAcceptedAt: a.consent_accepted_at, createdAt: a.created_at,
+    },
+    profiles: profiles.map((p) => ({
+      id: p.id, username: p.username, avatarId: p.avatar_id, avatarKey: p.avatar_key, dob: p.dob, age: ageOn(p.dob),
+      ageGroup: p.age_group, ageGroupOverridden: !!p.age_group_override, isChild: !!p.is_child, language: p.language, mode: p.mode, createdAt: p.created_at,
+    })),
+  });
 });
+
+// Permanently delete an account. Cascades to every profile (incl. a parent's child profiles) and all
+// profile-owned data, and ends the user's sessions. The audit row keeps no email or username.
+router.delete('/:accountId', validate(z.object({ accountId: z.coerce.number().int().positive() }), 'params'),
+  validate(z.object({ confirm: z.literal(true), reason: z.string().trim().min(3).max(200) })), async (req, res) => {
+    const a = (await query('SELECT id, account_type FROM accounts WHERE id = ?', [req.validated.params.accountId]))[0];
+    if (!a) throw notFound('ACCOUNT_NOT_FOUND', 'Account not found');
+    const profileCount = (await query('SELECT COUNT(*) AS n FROM profiles WHERE account_id = ?', [a.id]))[0].n;
+    await query('DELETE FROM accounts WHERE id = ?', [a.id]);
+    // a pending request for this account is now done; close it so it leaves the queue
+    await query("UPDATE account_deletion_requests SET status = 'completed', profiles_deleted = ?, decided_by = ?, decided_at = UTC_TIMESTAMP(), decision_note = ? WHERE account_id = ? AND status = 'pending'",
+      [profileCount, req.admin.id, 'Deleted from the Users page', a.id]);
+    await audit(req, 'user.deleted', { entityType: 'account', entityId: a.id, details: { accountType: a.account_type, profilesDeleted: profileCount, reason: req.body.reason } });
+    res.json({ deleted: true, accountId: a.id, profilesDeleted: profileCount });
+  });
 
 // Manually set (or clear) a profile's age group. A cleared override goes back to the DOB-derived group.
 router.patch('/profiles/:id/age-group', validate(z.object({ id: z.coerce.number().int().positive() }), 'params'),

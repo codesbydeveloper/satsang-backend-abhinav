@@ -10,6 +10,7 @@ const { unauthorized } = require('../utils/errors');
 const { checkUsername } = require('../utils/usernameFilter');
 const { AGE_GROUPS } = require('../utils/ageGroup');
 const { etDate, TZ } = require('../utils/time');
+const { requestDeletion } = require('../utils/deletionRequests');
 
 const router = express.Router();
 
@@ -36,14 +37,14 @@ router.get('/usernames/check', usernameLimiter, validate(z.object({ username: z.
 
 /**
  * Backend for the external "Delete my account" web page that Google Play's Data Safety section requires.
- * Works without the app: the person proves ownership with email + password.
+ * Works without the app: the person proves ownership with email + password. Files a deletion
+ * request that a Full Admin approves in the Admin Panel.
  */
 router.post('/public/delete-account', authLimiter, validate(z.object({ email: S.email, password: z.string().min(1), confirm: z.literal(true) })), async (req, res) => {
   const account = (await query('SELECT * FROM accounts WHERE email = ?', [req.body.email]))[0];
   const ok = await bcrypt.compare(req.body.password, account ? account.password_hash : bcrypt.hashSync('x', config.bcryptRounds));
   if (!account || !ok) throw unauthorized('INVALID_CREDENTIALS', 'Email or password is incorrect');
-  await query('DELETE FROM accounts WHERE id = ?', [account.id]);
-  res.json({ deleted: true });
+  res.status(202).json(await requestDeletion(account, 'web'));
 });
 
 module.exports = router;

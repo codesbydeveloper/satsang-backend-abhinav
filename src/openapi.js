@@ -34,7 +34,7 @@ module.exports = {
   servers: [{ url: '/api/v1' }],
   tags: [
     { name: 'Meta' }, { name: 'Auth' }, { name: 'Account' }, { name: 'Profiles' }, { name: 'Parent PIN' },
-    { name: 'Admin Auth' }, { name: 'Admin Management' }, { name: 'Admin Users' }, { name: 'Admin Moderation' }, { name: 'Admin Audit' },
+    { name: 'Admin Auth' }, { name: 'Admin Management' }, { name: 'Admin Users' }, { name: 'Admin Moderation' }, { name: 'Admin Audit' }, { name: 'Admin Dashboard' }, { name: 'Admin Deletion Requests' },
   ],
   components: {
     securitySchemes: {
@@ -51,6 +51,15 @@ module.exports = {
       Account: obj({ id: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }), emailVerified: bool(), parentPinSet: bool() }),
       AuthResponse: obj({ accessToken: str(), refreshToken: str(), account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) }),
       Admin: obj({ id: int(), email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), totpEnabled: bool() }),
+      DeletionRequestFiled: obj({ requested: bool(), requestId: int(), status: str({ enum: ['pending'] }), requestedAt: str({ description: 'UTC' }) }),
+      DeletionRequest: obj({
+        id: int(), accountId: int(), accountType: str({ enum: ['adult', 'parent'] }), source: str({ enum: ['app', 'web'], description: 'app = in the app, web = public delete-account page' }),
+        status: str({ enum: ['pending', 'completed', 'rejected'] }),
+        username: str({ nullable: true, description: 'The adult’s own profile; null for parent accounts and once the account is deleted' }),
+        email: str({ nullable: true, description: 'Null once the account is deleted' }), emailVerified: { type: 'boolean', nullable: true },
+        childProfiles: int(), profilesDeleted: int({ nullable: true }), requestedAt: str({ description: 'UTC' }), decidedAt: str({ nullable: true, description: 'UTC' }),
+        decidedBy: { ...obj({ id: int(), name: str() }), nullable: true }, decisionNote: str({ nullable: true, description: 'Rejection reason or approval note' }),
+      }),
       AgeGroup: str({ enum: ['Shishu', 'Bals/Balikas A', 'Bals/Balikas B', 'Bals/Balikas C', 'Kishors/Kishoris A', 'Kishors/Kishoris B', 'Yuvak/Yuvatis A', 'Yuvaks/Yuvatis B', 'Vadil'] }),
     },
   },
@@ -62,7 +71,7 @@ module.exports = {
       responses: { 200: ok('{ available, reason? } — reason is INVALID_FORMAT, BLOCKED_WORD, RESERVED or TAKEN') } }) },
     '/public/delete-account': { post: op('Account', 'Delete an account from the external web page (Google Play Data Safety requirement)', {
       requestBody: body(obj({ email: str(), password: str(), confirm: { type: 'boolean', enum: [true] } }, ['email', 'password', 'confirm'])),
-      responses: { 200: ok('Deleted'), ...errors(401, 429) } }) },
+      responses: { 202: ok('Deletion request filed (or the already-pending one returned); a Full Admin approves it', ref('DeletionRequestFiled')), ...errors(401, 429) } }) },
 
     '/auth/register': { post: op('Auth', 'Create an adult/independent or parent account and email a verification code', {
       requestBody: body(obj({
@@ -87,8 +96,8 @@ module.exports = {
     '/me': {
       get: op('Account', 'Current account, its profiles, and the active profile', { security: user, responses: { 200: ok('Account', obj({ account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) })), ...errors(401) } }),
       patch: op('Account', 'Update phone or language', { security: user, requestBody: body(obj({ phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }) }), false), responses: { 200: ok('Updated'), ...errors(400, 401) } }),
-      delete: op('Account', 'Delete the account after password check. Deleting a parent account deletes every child profile.', {
-        security: user, requestBody: body(obj({ password: str(), confirm: { type: 'boolean', enum: [true] } }, ['password', 'confirm'])), responses: { 200: ok('Deleted'), ...errors(400, 401) } }),
+      delete: op('Account', 'Ask for the account to be deleted (password check). Files a deletion request; once a Full Admin approves it the account is deleted, and for a parent account every child profile too. Repeating the call returns the pending request.', {
+        security: user, requestBody: body(obj({ password: str(), confirm: { type: 'boolean', enum: [true] } }, ['password', 'confirm'])), responses: { 202: ok('Deletion request filed', ref('DeletionRequestFiled')), ...errors(400, 401) } }),
     },
     '/me/change-password': { post: op('Account', 'Change password; other devices are logged out and this device gets fresh tokens', {
       security: user, requestBody: body(obj({ currentPassword: str(), newPassword: str() }, ['currentPassword', 'newPassword'])), responses: { 200: ok('New session', ref('AuthResponse')), ...errors(400, 401) } }) },
@@ -149,8 +158,20 @@ module.exports = {
 
     '/admin/users': { get: op('Admin Users', 'Search accounts by email or username (Full Admin)', {
       security: admin, parameters: [{ name: 'q', in: 'query', schema: str() }, { name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int() }], responses: { 200: ok('Page of accounts/profiles'), ...errors(401, 403) } }) },
-    '/admin/users/{accountId}': { get: op('Admin Users', 'One account with its profiles (logged in the audit log)', {
-      security: admin, parameters: [{ name: 'accountId', in: 'path', required: true, schema: int() }], responses: { 200: ok('Account detail'), ...errors(401, 403, 404) } }) },
+    '/admin/users/{accountId}': { get: op('Admin Users', 'The "View" page: one account with all its profiles (logged in the audit log as user.viewed)', {
+      security: admin, parameters: [{ name: 'accountId', in: 'path', required: true, schema: int() }],
+      responses: { 200: ok('Account detail', obj({
+        account: obj({ id: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }),
+          emailVerified: bool(), emailVerifiedAt: str({ nullable: true, description: 'UTC' }), parentPinSet: bool(),
+          privacyPolicyVersion: str({ nullable: true }), consentAcceptedAt: str({ nullable: true, description: 'UTC' }), createdAt: str({ description: 'UTC' }) }),
+        profiles: { type: 'array', items: obj({ id: int(), username: str(), avatarId: int(), avatarKey: str(), dob: str({ format: 'date' }), age: int(),
+          ageGroup: ref('AgeGroup'), ageGroupOverridden: bool(), isChild: bool(), language: str({ enum: ['en', 'gu'] }),
+          mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), createdAt: str({ description: 'UTC' }) }) },
+      })), ...errors(401, 403, 404) } }),
+      delete: op('Admin Users', 'Permanently delete an account and all its profiles (a parent’s child profiles too). Ends the user’s sessions. Reason is required and audited as user.deleted.', {
+        security: admin, parameters: [{ name: 'accountId', in: 'path', required: true, schema: int() }],
+        requestBody: body(obj({ confirm: { type: 'boolean', enum: [true] }, reason: str({ description: '3–200 chars' }) }, ['confirm', 'reason'])),
+        responses: { 200: ok('Deleted', obj({ deleted: bool(), accountId: int(), profilesDeleted: int() })), ...errors(400, 401, 403, 404) } }) },
     '/admin/users/profiles/{id}/age-group': { patch: op('Admin Users', 'Manually set an age group (or null to go back to the DOB-derived group). Reason is required and audited.', {
       security: admin, parameters: [idParam], requestBody: body(obj({ ageGroup: { ...ref('AgeGroup'), nullable: true }, reason: str() }, ['ageGroup', 'reason'])), responses: { 200: ok('Updated'), ...errors(400, 401, 403, 404) } }) },
 
@@ -160,6 +181,46 @@ module.exports = {
         security: admin, requestBody: body(obj({ word: str(), kind: str({ enum: ['blocked', 'reserved'] }) }, ['word'])), responses: { 201: ok('Added'), ...errors(400, 401, 403, 409) } }),
     },
     '/admin/blocked-words/{id}': { delete: op('Admin Moderation', 'Remove a word', { security: admin, parameters: [idParam], responses: { 200: ok('Removed'), ...errors(401, 403, 404) } }) },
+
+    '/admin/dashboard': { get: op('Admin Dashboard', 'Live numbers for the Admin Panel home page (Full Admin). "Today" and chart days are America/New_York calendar days. No emails or DOBs are returned.', {
+      security: admin,
+      parameters: [
+        { name: 'days', in: 'query', schema: int({ enum: [7, 30], default: 7 }), description: 'New-registrations chart range' },
+        { name: 'recent', in: 'query', schema: int({ minimum: 1, maximum: 50, default: 5 }), description: 'Rows in Recent registrations' },
+        { name: 'activity', in: 'query', schema: int({ minimum: 1, maximum: 50, default: 10 }), description: 'Rows in Recent admin activity' },
+      ],
+      responses: { 200: ok('Dashboard', obj({
+        generatedAt: str({ format: 'date-time' }), timeZone: str({ example: 'America/New_York' }),
+        totals: obj({ accounts: int(), adultAccounts: int(), parentAccounts: int(), profiles: int(), childProfiles: int(), newRegistrationsToday: int() }),
+        ageGroups: { type: 'array', items: obj({ ageGroup: ref('AgeGroup'), count: int() }) },
+        registrations: obj({ days: int(), total: int(), series: { type: 'array', items: obj({ date: str({ format: 'date' }), count: int() }) } }),
+        modes: { type: 'array', items: obj({ key: str({ enum: ['sanatan', 'satsang', 'not_set'] }), count: int() }) },
+        languages: { type: 'array', items: obj({ key: str({ enum: ['en', 'gu'] }), count: int() }) },
+        recentRegistrations: { type: 'array', items: obj({ accountId: int(), profileId: int({ nullable: true }), type: str({ enum: ['adult', 'parent', 'child'] }), username: str({ nullable: true }), ageGroup: str({ nullable: true }), createdAt: str({ description: 'UTC' }) }) },
+        recentAdminActivity: { type: 'array', items: obj({ id: int(), adminId: int({ nullable: true }), adminName: str({ nullable: true }), adminEmail: str({ nullable: true }), action: str(), entityType: str({ nullable: true }), entityId: str({ nullable: true }), details: { type: 'object', nullable: true }, createdAt: str({ description: 'UTC' }) }) },
+      })), ...errors(400, 401, 403) } }) },
+
+    '/admin/deletion-requests': { get: op('Admin Deletion Requests', 'The Deletion requests page (Full Admin): one status tab, newest first. counts covers every status with the same q/source filters, for the tab badges (counts.pending is the sidebar badge).', {
+      security: admin,
+      parameters: [
+        { name: 'status', in: 'query', schema: str({ enum: ['pending', 'completed', 'rejected', 'all'], default: 'pending' }) },
+        { name: 'q', in: 'query', schema: str(), description: 'Username or email (pending/rejected rows only; completed rows keep neither)' },
+        { name: 'source', in: 'query', schema: str({ enum: ['app', 'web', 'all'], default: 'all' }) },
+        { name: 'page', in: 'query', schema: int({ default: 1 }) }, { name: 'pageSize', in: 'query', schema: int({ default: 25, maximum: 100 }) },
+      ],
+      responses: { 200: ok('Page of requests', obj({ status: str(), page: int(), pageSize: int(), total: int(),
+        counts: obj({ pending: int(), completed: int(), rejected: int(), all: int() }), rows: { type: 'array', items: ref('DeletionRequest') } })), ...errors(400, 401, 403) } }) },
+    '/admin/deletion-requests/{id}': { get: op('Admin Deletion Requests', 'The "View" page: the request, the account and its profiles (no DOBs). Audited as deletion_request.viewed.', {
+      security: admin, parameters: [idParam],
+      responses: { 200: ok('Request detail', obj({ request: ref('DeletionRequest'),
+        account: { ...obj({ id: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), emailVerified: bool(), createdAt: str({ description: 'UTC' }) }), nullable: true, description: 'Null once completed' },
+        profiles: { type: 'array', items: obj({ id: int(), username: str(), isChild: bool(), ageGroup: ref('AgeGroup'), avatarKey: str(), createdAt: str({ description: 'UTC' }) }) } })), ...errors(401, 403, 404) } }) },
+    '/admin/deletion-requests/{id}/approve': { post: op('Admin Deletion Requests', 'Approve: permanently deletes the account and all its profiles (a parent’s child profiles too) and ends the user’s sessions. Audited as deletion_request.approved, without email or username.', {
+      security: admin, parameters: [idParam], requestBody: body(obj({ confirm: { type: 'boolean', enum: [true] }, note: str({ description: 'Optional, up to 200 chars' }) }, ['confirm'])),
+      responses: { 200: ok('Deleted', obj({ id: int(), status: str({ enum: ['completed'] }), accountId: int(), profilesDeleted: int() })), ...errors(400, 401, 403, 404, 409) } }) },
+    '/admin/deletion-requests/{id}/reject': { post: op('Admin Deletion Requests', 'Reject: the account is kept. Reason is required and audited as deletion_request.rejected. The owner can ask again.', {
+      security: admin, parameters: [idParam], requestBody: body(obj({ reason: str({ description: '3–200 chars' }) }, ['reason'])),
+      responses: { 200: ok('Rejected', obj({ id: int(), status: str({ enum: ['rejected'] }), accountId: int() })), ...errors(400, 401, 403, 404, 409) } }) },
 
     '/admin/audit-log': { get: op('Admin Audit', 'Who changed what and when (Full Admin, read-only)', {
       security: admin, parameters: ['adminId', 'action', 'entityType', 'from', 'to', 'page', 'pageSize'].map((n) => ({ name: n, in: 'query', schema: str() })), responses: { 200: ok('Audit entries'), ...errors(401, 403) } }) },

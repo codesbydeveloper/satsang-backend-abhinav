@@ -102,7 +102,11 @@ test('deleting a parent account deletes every child profile', async () => {
   const p = await h.parentLogin();
   await addChild(p, { username: 'child_aaa' }); await addChild(p, { username: 'child_bbb' });
   assert.equal((await h.query('SELECT COUNT(*) n FROM profiles'))[0].n, 2);
-  assert.equal((await api().delete('/api/v1/me').set(p.auth).send({ password: 'Secret123', confirm: true })).status, 200);
+  const r = await api().delete('/api/v1/me').set(p.auth).send({ password: 'Secret123', confirm: true });
+  assert.equal(r.status, 202);
+  const b = await h.adminLogin(await h.makeAdmin('boss@example.org'));
+  const ok = await api().post(`/api/v1/admin/deletion-requests/${r.body.requestId}/approve`).set(h.bearer(b.token)).send({ confirm: true });
+  assert.equal(ok.body.profilesDeleted, 2);
   assert.equal((await h.query('SELECT COUNT(*) n FROM profiles'))[0].n, 0);
 });
 

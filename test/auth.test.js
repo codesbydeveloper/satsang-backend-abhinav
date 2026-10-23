@@ -109,10 +109,18 @@ test('change password logs out other devices but keeps this one', async () => {
   assert.equal((await api().post('/api/v1/me/change-password').set(bearer(c.body.accessToken)).send({ currentPassword: 'wrong', newPassword: 'Changed9999' })).status, 401);
 });
 
-test('adult deletes own account with password; everything is gone and the email can be reused', async () => {
+test('adult asks to delete own account with password; once approved everything is gone and the email can be reused', async () => {
   const s = await h.adultLogin();
   assert.equal((await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'bad', confirm: true })).status, 401);
-  assert.equal((await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'Secret123', confirm: true })).status, 200);
+  const r = await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'Secret123', confirm: true });
+  assert.equal(r.status, 202);
+  assert.equal(r.body.status, 'pending');
+  // asking again returns the same pending request
+  assert.equal((await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'Secret123', confirm: true })).body.requestId, r.body.requestId);
+  assert.equal((await h.query('SELECT COUNT(*) n FROM accounts'))[0].n, 1);   // nothing deleted until an admin approves
+
+  const b = await h.adminLogin(await h.makeAdmin('boss@example.org'));
+  assert.equal((await api().post(`/api/v1/admin/deletion-requests/${r.body.requestId}/approve`).set(bearer(b.token)).send({ confirm: true })).status, 200);
   assert.equal((await h.query('SELECT COUNT(*) n FROM profiles'))[0].n, 0);
   assert.equal((await h.query('SELECT COUNT(*) n FROM refresh_tokens'))[0].n, 0);
   assert.equal((await api().get('/api/v1/me').set(bearer(s.accessToken))).status, 401);
@@ -122,6 +130,8 @@ test('adult deletes own account with password; everything is gone and the email 
 test('public delete-account page endpoint works with email + password only', async () => {
   await h.adultLogin();
   assert.equal((await api().post('/api/v1/public/delete-account').send({ email: 'ravi@example.org', password: 'bad', confirm: true })).status, 401);
-  assert.equal((await api().post('/api/v1/public/delete-account').send({ email: 'ravi@example.org', password: 'Secret123', confirm: true })).status, 200);
-  assert.equal((await h.query('SELECT COUNT(*) n FROM accounts'))[0].n, 0);
+  const r = await api().post('/api/v1/public/delete-account').send({ email: 'ravi@example.org', password: 'Secret123', confirm: true });
+  assert.equal(r.status, 202);
+  const row = (await h.query('SELECT source, status FROM account_deletion_requests WHERE id = ?', [r.body.requestId]))[0];
+  assert.deepEqual({ ...row }, { source: 'web', status: 'pending' });
 });
