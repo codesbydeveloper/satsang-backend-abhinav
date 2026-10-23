@@ -7,6 +7,7 @@
 - [x] Account & profile deletion + public deletion endpoint
 - [x] Admin: roles, TOTP 2FA, audit log, user search, age-group override
 - [x] Swagger/OpenAPI docs, tests (34)
+- [x] Independent accounts: date of birth first at register (neutral age gate, nothing stored under the consent age), `POST /me/profile` for the username/avatar later (branch `m1/register-dob`, migration 004, tests 42)
 - [ ] Verified by Abhinav on his machine and merged
 - [ ] Deployed to Loyadham's Hostinger (needs Node-capable plan, domain, SMTP details)
 ## M2 ... M4: see CLAUDE.md
