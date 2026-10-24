@@ -42,7 +42,7 @@ module.exports = {
       adminBearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Admin token from the 2FA step (the step tokens from /admin/auth/login are only accepted by the TOTP endpoints).' },
     },
     schemas: {
-      Error: obj({ error: obj({ code: str(), message: str(), details: { type: 'array', items: obj({ field: str(), message: str() }) } }) }),
+      Error: obj({ error: obj({ code: str(), message: str(), details: { description: 'VALIDATION_ERROR: [{ field, message }]. PIN_INCORRECT: { attemptsLeft }. PIN_LOCKED: { retryAfterSeconds }.', oneOf: [{ type: 'array', items: obj({ field: str(), message: str() }) }, obj({ attemptsLeft: int(), retryAfterSeconds: int() })] } }) }),
       Profile: obj({
         id: int(), username: str(), avatarId: int({ minimum: 1, maximum: 16 }), ageGroup: str({ example: 'Bals/Balikas B' }),
         isChild: bool(), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }),
@@ -112,18 +112,35 @@ module.exports = {
       security: user,
       requestBody: body(obj({ username: str({ description: '3–20 letters (any script), digits, _ or .' }), avatarId: int({ description: '1–16' }), mode: str({ enum: ['sanatan', 'satsang'] }) }, ['username', 'avatarId'])),
       responses: { 201: ok('Profile created and active', obj({ accessToken: str(), activeProfileId: int(), profile: ref('Profile') })), ...errors(400, 401, 403, 409) } }) },
+    '/me/active-profile': { post: op('Account', 'Who is playing on this device: a profile, or null for the parent area', {
+      description: 'Parent accounts: leaving a child’s profile (to a sibling or to the parent area, profileId null) needs the Parent PIN '
+        + '(401 `PIN_REQUIRED` / `PIN_INCORRECT` with details.attemptsLeft, 429 `PIN_LOCKED` with details.retryAfterSeconds). From the parent area '
+        + '(where a password login starts) picking a child needs no PIN. Independent accounts can only pick their own profile. '
+        + 'Returns a new access token; the device session keeps the choice across refreshes.',
+      security: user, requestBody: body(obj({ profileId: int({ nullable: true }), pin: str({ description: '4 digits' }) }, ['profileId'])),
+      responses: { 200: ok('New access token', obj({ accessToken: str(), activeProfileId: int({ nullable: true }), profile: { ...ref('Profile'), nullable: true } })), ...errors(400, 401, 403, 404, 409, 429) } }) },
+    '/me/activity/heartbeat': { post: op('Account', 'Daily time: beats for the active profile (every ~60 s while the app is open; offline beats queued up to 1 day)', {
+      description: 'Each beat counts once per profile per UTC minute (retries are ignored) and is added to the America/New_York day it happened in. '
+        + 'Beats in the future or more than 24 h old are ignored. 403 `NO_ACTIVE_PROFILE` in the parent area.',
+      security: user, requestBody: body(obj({ beats: { type: 'array', minItems: 1, maxItems: 1500, items: obj({ at: str({ format: 'date-time' }), seconds: int({ minimum: 1, maximum: 60 }) }, ['at', 'seconds']) } }, ['beats'])),
+      responses: { 200: ok('Counted', obj({ counted: int(), ignored: int() })), ...errors(400, 401, 403) } }) },
+    '/me/children/{id}/activity': { get: op('Account', 'A child’s daily time for the parent area (parent accounts, parent area only)', {
+      security: user, parameters: [idParam, { name: 'days', in: 'query', schema: int({ minimum: 1, maximum: 90, default: 7 }) }],
+      responses: { 200: ok('Days, oldest first; missing days are 0', obj({ profileId: int(), timeZone: str(), today: str({ format: 'date' }), todaySeconds: int(), todayMinutes: int(), days: { type: 'array', items: obj({ day: str({ format: 'date' }), seconds: int(), minutes: int() }) } })), ...errors(400, 401, 403, 404) } }) },
     '/me/change-password': { post: op('Account', 'Change password; other devices are logged out and this device gets fresh tokens', {
       security: user, requestBody: body(obj({ currentPassword: str(), newPassword: str() }, ['currentPassword', 'newPassword'])), responses: { 200: ok('New session', ref('AuthResponse')), ...errors(400, 401) } }) },
 
     '/profiles': {
       get: op('Profiles', 'List the account’s profiles', { security: user, responses: { 200: ok('Profiles'), ...errors(401) } }),
-      post: op('Profiles', 'Add a child profile (parent accounts; needs Parent PIN and recorded parental consent)', {
-        security: user, requestBody: body(obj({ pin: str(), username: str(), avatarId: int(), dob: str({ format: 'date' }), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'] }), parentalConsent: { type: 'boolean', enum: [true] } }, ['pin', 'username', 'avatarId', 'dob', 'parentalConsent'])),
+      post: op('Profiles', 'Add a child profile (parent accounts, parent area; recorded parental consent)', {
+        description: 'From the parent area no PIN is needed (a PIN sent anyway is checked). The first child can be added before the Parent PIN exists; later children need it (409 `PIN_NOT_SET`). From a child’s session: 403 `PARENT_MODE_REQUIRED`. The response carries the server’s age group.',
+        security: user, requestBody: body(obj({ pin: str(), username: str(), avatarId: int(), dob: str({ format: 'date' }), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'] }), parentalConsent: { type: 'boolean', enum: [true] } }, ['username', 'avatarId', 'dob', 'parentalConsent'])),
         responses: { 201: ok('Created', obj({ profile: ref('Profile') })), ...errors(400, 401, 403, 409, 429) } }),
     },
     '/profiles/{id}': {
-      patch: op('Profiles', 'Change avatar, language or mode (a parent editing a child from parent mode must send the PIN)', {
-        security: user, parameters: [idParam], requestBody: body(obj({ avatarId: int(), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), pin: str() }), false),
+      patch: op('Profiles', 'Change username, avatar, language or mode', {
+        description: 'Parent area: any own child, no PIN. A parent session playing as one child editing a sibling: PIN required. The active profile itself: avatar / language / mode only (username: 403 `USERNAME_PARENT_ONLY`). Username errors: 400 `USERNAME_*`.',
+        security: user, parameters: [idParam], requestBody: body(obj({ username: str(), avatarId: int(), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), pin: str() }), false),
         responses: { 200: ok('Updated', obj({ profile: ref('Profile') })), ...errors(400, 401, 404, 429) } }),
       delete: op('Profiles', 'Delete one child profile with the Parent PIN; the parent account and siblings are unaffected', {
         security: user, parameters: [idParam], requestBody: body(obj({ pin: str(), confirm: { type: 'boolean', enum: [true] } }, ['pin', 'confirm'])), responses: { 200: ok('Deleted'), ...errors(400, 401, 403, 404, 429) } }),
@@ -133,14 +150,16 @@ module.exports = {
     '/profiles/parent-mode': { post: op('Profiles', 'Leave child mode and return to parent settings (Parent PIN required)', {
       security: user, requestBody: body(obj({ pin: str() }, ['pin'])), responses: { 200: ok('New access token in parent mode'), ...errors(401, 403, 429) } }) },
 
-    '/parent/pin': { post: op('Parent PIN', 'Create the 4-digit Parent PIN (first time; needs the account password)', {
-      security: user, requestBody: body(obj({ pin: str(), password: str() }, ['pin', 'password'])), responses: { 201: ok('Created'), ...errors(401, 403, 409) } }) },
-    '/parent/pin/verify': { post: op('Parent PIN', 'Check the PIN. Five wrong tries lock it for 15 minutes.', {
+    '/parent/pin': { post: op('Parent PIN', 'Create the 4-digit Parent PIN (first time, from the parent area; the password is optional and checked if sent)', {
+      security: user, requestBody: body(obj({ pin: str(), password: str() }, ['pin'])), responses: { 201: ok('Created'), ...errors(401, 403, 409) } }) },
+    '/parent/pin/verify': { post: op('Parent PIN', 'Check the PIN. Five wrong tries lock it for 5 minutes (details.attemptsLeft / details.retryAfterSeconds).', {
       security: user, requestBody: body(obj({ pin: str() }, ['pin'])), responses: { 200: ok('Correct'), ...errors(401, 409, 429) } }) },
-    '/parent/pin/reset': { post: op('Parent PIN', 'Forgot the PIN: set a new one with the account password (also clears a lock)', {
+    '/parent/pin/change': { post: op('Parent PIN', 'Change the PIN with the current one (the parent stays logged in)', {
+      security: user, requestBody: body(obj({ currentPin: str(), newPin: str() }, ['currentPin', 'newPin'])), responses: { 200: ok('Changed'), ...errors(400, 401, 409, 429) } }) },
+    '/parent/pin/reset': { post: op('Parent PIN', 'Forgot the PIN: set a new one with the account password (also clears a lock; the parent stays logged in)', {
       security: user, requestBody: body(obj({ password: str(), newPin: str() }, ['password', 'newPin'])), responses: { 200: ok('Reset'), ...errors(401) } }) },
 
-    '/profiles/activity': { post: op('Profiles', 'Heartbeat: add active seconds (1–300 per call) to today’s total for the active profile', {
+    '/profiles/activity': { post: op('Profiles', 'Older heartbeat (1–300 s added to today). The app uses POST /me/activity/heartbeat.', {
       security: user, requestBody: body(obj({ seconds: int({ minimum: 1, maximum: 300 }) }, ['seconds'])), responses: { 200: ok('ok'), ...errors(400, 401, 403) } }) },
     '/parent/report': { get: op('Parent PIN', 'Parent report: daily time and activity per child (parent mode only)', {
       security: user, parameters: [{ name: 'profileId', in: 'query', schema: int() }, { name: 'days', in: 'query', schema: int({ minimum: 1, maximum: 90, default: 7 }) }], responses: { 200: ok('Report'), ...errors(401, 403, 404) } }) },

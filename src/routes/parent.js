@@ -1,25 +1,31 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { z } = require('zod');
-const config = require('../config');
 const { query } = require('../db');
 const validate = require('../middleware/validate');
 const { requireAuth, requireParent } = require('../middleware/auth');
 const S = require('../utils/schemas');
 const { unauthorized, conflict } = require('../utils/errors');
-const { verifyPin } = require('../utils/pin');
+const { verifyPin, setPin } = require('../utils/pin');
 const { forbidden, notFound } = require('../utils/errors');
 const { etDate, addDays } = require('../utils/time');
 
 const router = express.Router();
 router.use(requireAuth, requireParent);
 
-// First-time PIN creation (needs the account password). Changing it later goes through /reset.
-router.post('/pin', validate(z.object({ pin: S.pin, password: z.string().min(1) })), async (req, res) => {
-  if (req.account.parent_pin_hash) throw conflict('PIN_ALREADY_SET', 'A PIN already exists. Use PIN reset to change it.');
-  if (!(await bcrypt.compare(req.body.password, req.account.password_hash))) throw unauthorized('INVALID_CREDENTIALS', 'Password is incorrect');
-  await query('UPDATE accounts SET parent_pin_hash = ?, pin_failed_attempts = 0, pin_locked_until = NULL WHERE id = ?',
-    [await bcrypt.hash(req.body.pin, config.bcryptRounds), req.account.id]);
+const requireParentMode = (req) => {
+  if (req.profileId) throw forbidden('PARENT_MODE_REQUIRED', 'Switch to the parent area first');
+};
+
+// First-time PIN creation, from the parent area (right after login or after adding the first child). The password is
+// optional here (the session was opened with it); if sent, it is checked. Changing it later: /pin/change or /pin/reset.
+router.post('/pin', validate(z.object({ pin: S.pin, password: z.string().min(1).optional() })), async (req, res) => {
+  requireParentMode(req);
+  if (req.account.parent_pin_hash) throw conflict('PIN_ALREADY_SET', 'A PIN already exists. Use PIN change or reset.');
+  if (req.body.password !== undefined && !(await bcrypt.compare(req.body.password, req.account.password_hash))) {
+    throw unauthorized('INVALID_CREDENTIALS', 'Password is incorrect');
+  }
+  await setPin(req.account.id, req.body.pin);
   res.status(201).json({ ok: true });
 });
 
@@ -28,11 +34,17 @@ router.post('/pin/verify', validate(z.object({ pin: S.pin })), async (req, res) 
   res.json({ ok: true });
 });
 
-// Forgot the PIN: reset with the account password.
+// Change the PIN with the current one. The parent stays logged in on every device.
+router.post('/pin/change', validate(z.object({ currentPin: S.pin, newPin: S.pin })), async (req, res) => {
+  await verifyPin(req.account, req.body.currentPin);
+  await setPin(req.account.id, req.body.newPin);
+  res.json({ ok: true });
+});
+
+// Forgot the PIN: reset with the account password (also clears a lock). The parent stays logged in.
 router.post('/pin/reset', validate(z.object({ password: z.string().min(1), newPin: S.pin })), async (req, res) => {
   if (!(await bcrypt.compare(req.body.password, req.account.password_hash))) throw unauthorized('INVALID_CREDENTIALS', 'Password is incorrect');
-  await query('UPDATE accounts SET parent_pin_hash = ?, pin_failed_attempts = 0, pin_locked_until = NULL WHERE id = ?',
-    [await bcrypt.hash(req.body.newPin, config.bcryptRounds), req.account.id]);
+  await setPin(req.account.id, req.body.newPin);
   res.json({ ok: true });
 });
 

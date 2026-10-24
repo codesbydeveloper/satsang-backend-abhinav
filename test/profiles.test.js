@@ -8,15 +8,24 @@ after(() => h.pool.end());
 
 const addChild = (p, over = {}) => api().post('/api/v1/profiles').set(p.auth).send({ pin: '1234', username: 'little_ram', avatarId: 2, dob: h.dobYearsAgo(8, 30), parentalConsent: true, ...over });
 
-test('parent starts in parent mode with no profiles; PIN is required before adding a child', async () => {
+test('parent starts in parent mode with no profiles; the first child comes before the PIN, the second needs it', async () => {
   const reg = await api().post('/api/v1/auth/register').send({ email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true });
   assert.equal(reg.status, 201);
   const v = await api().post('/api/v1/auth/verify-email').send({ email: 'p@example.org', code: h.lastCode('p@example.org') });
   assert.equal(v.body.activeProfileId, null);
   assert.equal(v.body.profiles.length, 0);
   assert.equal(v.body.account.parentPinSet, false);
-  const noPin = await api().post('/api/v1/profiles').set(bearer(v.body.accessToken)).send({ pin: '1234', username: 'kid_one', avatarId: 1, dob: h.dobYearsAgo(8), parentalConsent: true });
-  assert.equal(noPin.status, 409); assert.equal(noPin.body.error.code, 'PIN_NOT_SET');
+  const auth = bearer(v.body.accessToken);
+  const kid = { avatarId: 1, dob: h.dobYearsAgo(8), parentalConsent: true };
+  // a PIN sent before one exists is refused
+  assert.equal((await api().post('/api/v1/profiles').set(auth).send({ ...kid, pin: '1234', username: 'kid_zero' })).body.error.code, 'PIN_NOT_SET');
+  const first = await api().post('/api/v1/profiles').set(auth).send({ ...kid, username: 'kid_one' });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  const second = await api().post('/api/v1/profiles').set(auth).send({ ...kid, username: 'kid_two' });
+  assert.equal(second.status, 409); assert.equal(second.body.error.code, 'PIN_NOT_SET');
+  // set the PIN without the password (the session was opened with it); now the parent area adds children without a PIN
+  assert.equal((await api().post('/api/v1/parent/pin').set(auth).send({ pin: '2468' })).status, 201);
+  assert.equal((await api().post('/api/v1/profiles').set(auth).send({ ...kid, username: 'kid_two' })).status, 201);
 });
 
 test('parent registration requires confirming 18+ and cannot carry a profile', async () => {

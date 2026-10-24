@@ -6,16 +6,105 @@ const { query, tx } = require('../db');
 const validate = require('../middleware/validate');
 const { requireAuth } = require('../middleware/auth');
 const S = require('../utils/schemas');
-const { unauthorized, badRequest, forbidden, conflict } = require('../utils/errors');
+const { unauthorized, badRequest, forbidden, conflict, notFound } = require('../utils/errors');
 const { accountView, profileView, loadProfiles } = require('../utils/profiles');
 const { revokeAllRefreshTokens, signAccessToken } = require('../utils/tokens');
 const { startSession } = require('../utils/session');
 const { requestDeletion } = require('../utils/deletionRequests');
 const { ageOn, ageGroupForDob } = require('../utils/ageGroup');
 const { checkUsername, lowerKey } = require('../utils/usernameFilter');
+const { verifyPin } = require('../utils/pin');
+const { TZ, etDate, toSql } = require('../utils/time');
 
 const router = express.Router();
 router.use(requireAuth);
+
+/**
+ * Who is playing on this device. profileId = one of the account's profiles, or null for the parent area (parent
+ * accounts). The Parent PIN is needed when leaving a child's profile: to a sibling or to the parent area. From the
+ * parent area (where a password login starts) picking a child needs no PIN — so the first pick after login is free.
+ * Returns a new access token for the chosen profile; the device session (and refresh) keeps it.
+ */
+router.post('/active-profile', validate(z.object({ profileId: z.number().int().positive().nullable(), pin: S.pin.optional() })), async (req, res) => {
+  const a = req.account;
+  const target = req.body.profileId;
+  let profile = null;
+  if (target !== null) {
+    profile = (await query('SELECT * FROM profiles WHERE id = ? AND account_id = ?', [target, a.id]))[0];
+    if (!profile) throw notFound('PROFILE_NOT_FOUND', 'Profile not found');
+  }
+  if (a.account_type !== 'parent') {
+    if (!profile) throw forbidden('PARENT_ONLY', 'Only parent accounts have a parent area');
+  } else if (req.profileId && req.profileId !== target) {
+    if (req.body.pin === undefined) throw unauthorized('PIN_REQUIRED', 'Enter the Parent PIN');
+    await verifyPin(a, req.body.pin);
+  }
+  await query('UPDATE refresh_tokens SET profile_id = ? WHERE session_id = ? AND account_id = ? AND revoked_at IS NULL', [target, req.sessionId, a.id]);
+  res.json({
+    accessToken: signAccessToken(a, target, req.sessionId),
+    activeProfileId: target,
+    profile: profile ? profileView(profile, { own: true }) : null,
+  });
+});
+
+/**
+ * Daily time: the app sends a beat about every 60 s while a profile is active and the app is in the foreground, and
+ * queues beats while offline (at most 1 day back). Each beat counts once per profile per UTC minute (retries are
+ * harmless, nobody can count more than real time) and is added to the America/New_York day it happened in.
+ */
+const beatSchema = z.object({
+  beats: z.array(z.object({
+    at: z.string().max(40).refine((s) => !Number.isNaN(Date.parse(s)), 'Use an ISO 8601 time'),
+    seconds: z.number().int().min(1).max(60),
+  })).min(1).max(1500),
+});
+router.post('/activity/heartbeat', validate(beatSchema), async (req, res) => {
+  if (!req.profileId) throw forbidden('NO_ACTIVE_PROFILE', 'No profile is active on this device');
+  const now = Date.now();
+  let counted = 0, ignored = 0;
+  for (const b of req.body.beats) {
+    const t = Date.parse(b.at);
+    if (t > now + 2 * 60000 || t < now - 86400000) { ignored++; continue; }   // future, or older than 1 day
+    const minute = new Date(Math.floor(t / 60000) * 60000);
+    const r = await query('INSERT IGNORE INTO profile_activity_minutes (profile_id, minute_start, seconds) VALUES (?,?,?)',
+      [req.profileId, toSql(minute), b.seconds]);
+    if (!r.affectedRows) { ignored++; continue; }   // this minute was already counted
+    await query(
+      `INSERT INTO profile_daily_activity (profile_id, game_day, active_seconds) VALUES (?,?,?)
+       ON DUPLICATE KEY UPDATE active_seconds = LEAST(active_seconds + VALUES(active_seconds), 86400)`,
+      [req.profileId, etDate(minute), b.seconds]);
+    counted++;
+  }
+  await query('DELETE FROM profile_activity_minutes WHERE profile_id = ? AND minute_start < ?', [req.profileId, toSql(new Date(now - 2 * 86400000))]);
+  res.json({ counted, ignored });
+});
+
+/** The calendar days from `days - 1` days before `today` up to `today` (YYYY-MM-DD, no time-zone arithmetic). */
+function lastDays(today, days) {
+  const [y, m, d] = today.split('-').map(Number);
+  return Array.from({ length: days }, (_, i) => new Date(Date.UTC(y, m - 1, d - (days - 1 - i))).toISOString().slice(0, 10));
+}
+
+// A child's daily time for the parent area (oldest day first, missing days = 0). Parent accounts, parent area only.
+router.get('/children/:id/activity', validate(z.object({ id: z.coerce.number().int().positive() }), 'params'),
+  validate(z.object({ days: z.coerce.number().int().min(1).max(90).default(7) }), 'query'), async (req, res) => {
+    if (req.account.account_type !== 'parent') throw forbidden('PARENT_ONLY', 'Only parent accounts can do this');
+    if (req.profileId) throw forbidden('PARENT_MODE_REQUIRED', 'Switch to the parent area first');
+    const id = req.validated.params.id;
+    const kid = (await query('SELECT id FROM profiles WHERE id = ? AND account_id = ? AND is_child = 1', [id, req.account.id]))[0];
+    if (!kid) throw notFound('PROFILE_NOT_FOUND', 'Profile not found');
+    const today = etDate();
+    const days = lastDays(today, req.validated.query.days);
+    const rows = await query('SELECT game_day, active_seconds FROM profile_daily_activity WHERE profile_id = ? AND game_day BETWEEN ? AND ?',
+      [id, days[0], today]);
+    const byDay = new Map(rows.map((r) => [String(r.game_day).slice(0, 10), r.active_seconds]));
+    const list = days.map((day) => {
+      const seconds = byDay.get(day) || 0;
+      return { day, seconds, minutes: Math.floor(seconds / 60) };
+    });
+    const t = list[list.length - 1];
+    res.json({ profileId: id, timeZone: TZ, today, todaySeconds: t.seconds, todayMinutes: t.minutes, days: list });
+  });
 
 router.get('/', async (req, res) => {
   const profiles = await loadProfiles(req.account.id);

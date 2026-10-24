@@ -40,15 +40,29 @@ router.post('/activity', validate(z.object({ seconds: z.number().int().min(1).ma
   res.json({ ok: true });
 });
 
-// Add a child profile (parent accounts). Protected by the Parent PIN and a recorded parental consent.
+/**
+ * Parent-area guard for managing child profiles. The parent area is a session in parent mode (no active profile):
+ * reached by a password login or by entering the PIN (POST /me/active-profile), so it needs no PIN per request.
+ * A PIN sent anyway is checked. From a child's session the PIN is required.
+ */
+async function requireParentArea(req, pin) {
+  if (pin !== undefined) return verifyPin(req.account, pin);
+  if (req.profileId) throw forbidden('PARENT_MODE_REQUIRED', 'Switch to the parent area first (Parent PIN)');
+}
+
+// Add a child profile (parent accounts, parent area) with a recorded parental consent. The first child may be added
+// before the Parent PIN exists (the app asks for the PIN right after); later children need the PIN to be set.
 const createSchema = z.object({
-  pin: S.pin, username: S.username, avatarId: S.avatarId, dob: S.dob,
+  pin: S.pin.optional(), username: S.username, avatarId: S.avatarId, dob: S.dob,
   language: S.language.optional(), mode: S.mode.optional(),
   parentalConsent: z.literal(true, { error: 'Parental consent is required to create a child profile' }),
 });
 router.post('/', requireParent, validate(createSchema), async (req, res) => {
   const b = req.body;
-  await verifyPin(req.account, b.pin);
+  await requireParentArea(req, b.pin);
+  if (!req.account.parent_pin_hash && (await query('SELECT 1 FROM profiles WHERE account_id = ? LIMIT 1', [req.account.id])).length) {
+    throw conflict('PIN_NOT_SET', 'Create a Parent PIN first');
+  }
   const age = ageOn(b.dob);
   if (age > 18) throw badRequest('CHILD_TOO_OLD', 'Child profiles are for ages 18 and under. Older users register their own account.');
   const u = await checkUsername(b.username);
@@ -63,15 +77,26 @@ router.post('/', requireParent, validate(createSchema), async (req, res) => {
   res.status(201).json({ profile: profileView(p, { own: true }) });
 });
 
-// Change avatar / language / mode. A parent needs the PIN to edit a child from parent mode;
-// a child (or adult) can change these on their own active profile.
+// Change username / avatar / language / mode.
+// - Parent in the parent area: any of their children, no PIN (the area itself is PIN-protected).
+// - Parent session playing as one child, editing a sibling: PIN required.
+// - The active profile itself (child or adult): avatar / language / mode only; a username change is parent-only.
 const patchSchema = z.object({
-  avatarId: S.avatarId.optional(), language: S.language.optional(), mode: S.mode.nullable().optional(), pin: S.pin.optional(),
+  username: S.username.optional(), avatarId: S.avatarId.optional(), language: S.language.optional(),
+  mode: S.mode.nullable().optional(), pin: S.pin.optional(),
 });
 router.patch('/:id', validate(idParam, 'params'), validate(patchSchema), async (req, res) => {
   const p = await ownedProfile(req);
-  if (req.account.account_type === 'parent' && req.profileId !== p.id) await verifyPin(req.account, req.body.pin || '');
-  const { avatarId, language, mode } = req.body;
+  const isParent = req.account.account_type === 'parent';
+  if (isParent && req.profileId && req.profileId !== p.id) await verifyPin(req.account, req.body.pin || '');
+  else if (isParent && req.body.pin !== undefined) await verifyPin(req.account, req.body.pin);
+  const { username, avatarId, language, mode } = req.body;
+  if (username !== undefined) {
+    if (!isParent || (req.profileId === p.id && req.body.pin === undefined)) throw forbidden('USERNAME_PARENT_ONLY', 'Only a parent can change this username');
+    const u = await checkUsername(username, { excludeProfileId: p.id });
+    if (!u.ok) throw badRequest('USERNAME_' + u.reason, 'That username cannot be used');
+    await query('UPDATE profiles SET username = ?, username_lower = ? WHERE id = ?', [username.normalize('NFC'), lowerKey(username), p.id]);
+  }
   if (avatarId !== undefined) await query('UPDATE profiles SET avatar_id = ? WHERE id = ?', [avatarId, p.id]);
   if (language !== undefined) await query('UPDATE profiles SET language = ? WHERE id = ?', [language, p.id]);
   if (mode !== undefined) await query('UPDATE profiles SET mode = ? WHERE id = ?', [mode, p.id]);
