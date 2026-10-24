@@ -114,9 +114,12 @@ router.post('/refresh', authLimiter, validate(z.object({ refreshToken: z.string(
 
   // rotate: the old token dies, the session (and its active profile) continues
   await query('UPDATE refresh_tokens SET revoked_at = UTC_TIMESTAMP() WHERE id = ?', [row.id]);
-  const { raw } = await createRefresh(account.id, { sessionId: row.session_id, profileId: row.profile_id });
   const profiles = await loadProfiles(account.id);
-  res.json(buildAuthResponse(account, profiles, row.profile_id, raw, row.session_id));
+  // An independent account always plays as its own profile. A session that started before that profile existed
+  // (created on another device, or a POST /me/profile retry that got 409 PROFILE_EXISTS) is moved into it here.
+  const profileId = row.profile_id || (account.account_type === 'adult' && profiles[0] ? profiles[0].id : null);
+  const { raw } = await createRefresh(account.id, { sessionId: row.session_id, profileId });
+  res.json(buildAuthResponse(account, profiles, profileId, raw, row.session_id));
 });
 
 router.post('/logout', requireAuth, async (req, res) => {

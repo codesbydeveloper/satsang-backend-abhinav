@@ -9,7 +9,8 @@
 - [x] Admin dashboard endpoint (live totals, age groups, registrations chart, mode/language, recent sign-ups, recent admin activity)
 - [x] Account deletion requests: app and web requests queue for a Full Admin to approve (deletes) or reject; list/tabs/search/view endpoints
 - [x] Independent accounts: date of birth first at register (neutral age gate, nothing stored under the consent age), `POST /me/profile` for the username/avatar later (migration 004)
-- [x] Swagger/OpenAPI docs, tests (50)
+- [x] Refresh moves an independent session that has no active profile into the account's own profile (recovery after `409 PROFILE_EXISTS`, e.g. profile created on another device) — branch `m1/profile-setup`
+- [x] Swagger/OpenAPI docs, tests (52)
 - [ ] Verified by Abhinav on his machine and merged
 - [ ] Deployed to Loyadham's Hostinger (needs Node-capable plan, domain, SMTP details)
 ## M2 ... M4: see CLAUDE.md

@@ -92,7 +92,7 @@ module.exports = {
     '/auth/resend-code': { post: op('Auth', 'Send a new verification code (always answers ok)', { requestBody: body(obj({ email: str() }, ['email'])), responses: { 200: ok('ok'), ...errors(429) } }) },
     '/auth/login': { post: op('Auth', 'Log in with email + password', {
       requestBody: body(obj({ email: str(), password: str() }, ['email', 'password'])), responses: { 200: ok('Logged in', ref('AuthResponse')), ...errors(401, 403, 429) } }) },
-    '/auth/refresh': { post: op('Auth', 'Exchange a refresh token for a new pair (the old refresh token stops working)', {
+    '/auth/refresh': { post: op('Auth', 'Exchange a refresh token for a new pair (the old refresh token stops working). The session keeps its active profile; an independent session without one is moved into the account\'s own profile once it exists.', {
       requestBody: body(obj({ refreshToken: str() }, ['refreshToken'])), responses: { 200: ok('New tokens', ref('AuthResponse')), ...errors(401) } }) },
     '/auth/logout': { post: op('Auth', 'End this device session', { security: user, responses: { 200: ok('ok'), ...errors(401) } }) },
     '/auth/forgot-password': { post: op('Auth', 'Email a password-reset code (always answers ok)', { requestBody: body(obj({ email: str() }, ['email'])), responses: { 200: ok('ok'), ...errors(429) } }) },

@@ -121,6 +121,32 @@ test('POST /me/profile: only once, only independent accounts, username rules app
   assert.equal(anon.status, 401);
 });
 
+test('a session started before the profile existed is moved into it on refresh (PROFILE_EXISTS recovery)', async () => {
+  // Two devices log in before the profile exists; device B creates it; device A then gets 409 and refreshes.
+  const a = await independentLogin('two@example.org');
+  const b = await api().post('/api/v1/auth/login').send({ email: 'two@example.org', password: 'Secret123' });
+  const created = await api().post('/api/v1/me/profile').set(bearer(b.body.accessToken)).send({ username: 'two_devices', avatarId: 4, mode: 'satsang' });
+  assert.equal(created.status, 201);
+
+  const again = await api().post('/api/v1/me/profile').set(bearer(a.accessToken)).send({ username: 'two_devices_a', avatarId: 5 });
+  assert.equal(again.status, 409); assert.equal(again.body.error.code, 'PROFILE_EXISTS');
+
+  const refreshed = await api().post('/api/v1/auth/refresh').send({ refreshToken: a.refreshToken });
+  assert.equal(refreshed.status, 200);
+  assert.equal(refreshed.body.activeProfileId, created.body.profile.id);
+  const me = await api().get('/api/v1/me').set(bearer(refreshed.body.accessToken));
+  assert.equal(me.body.activeProfileId, created.body.profile.id, 'the access token and the session agree');
+  assert.equal(me.body.profiles[0].ageGroup, 'Yuvak/Yuvatis A', 'GET /me carries the age group');
+  assert.equal(me.body.profiles[0].mode, 'satsang');
+});
+
+test('parents stay in parent mode when they refresh', async () => {
+  const parent = await h.parentLogin();
+  const r = await api().post('/api/v1/auth/refresh').send({ refreshToken: parent.refreshToken });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.activeProfileId, null);
+});
+
 test('/api-docs.json documents the dob field and POST /me/profile', async () => {
   const r = await api().get('/api-docs.json');
   assert.equal(r.status, 200);
