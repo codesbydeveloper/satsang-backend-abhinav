@@ -92,17 +92,27 @@ test('switching to a child needs the PIN, survives token refresh, and exiting ne
   assert.equal((await api().get('/api/v1/me').set(bearer(back.body.accessToken))).body.activeProfileId, null);
 });
 
-test('deleting one child profile keeps the parent and siblings; the deleted profile cannot stay active', async () => {
+test('deleting one child profile keeps the parent and siblings; devices playing as that child are logged out', async () => {
   const p = await h.parentLogin();
   const a = (await addChild(p, { username: 'child_aaa' })).body.profile;
   const b = (await addChild(p, { username: 'child_bbb' })).body.profile;
-  await api().post(`/api/v1/profiles/${a.id}/switch`).set(p.auth).send({ pin: '1234' });
+  // a second device plays as child a; this device stays in the parent area
+  const tablet = await api().post('/api/v1/auth/login').send({ email: 'parent@example.org', password: 'Secret123' });
+  const asA = bearer((await api().post('/api/v1/me/active-profile').set(bearer(tablet.body.accessToken)).send({ profileId: a.id })).body.accessToken);
+  assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(asA).send({ pin: '1234', confirm: true })).body.error.code, 'PARENT_MODE_REQUIRED');
   assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '0000', confirm: true })).status, 401);
-  assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '1234', confirm: true })).status, 200);
+  assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '1234' })).status, 400, 'confirm required');
+  const del = await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '1234', confirm: true });
+  assert.equal(del.status, 200);
+  assert.deepEqual(del.body, { deleted: true, profileId: a.id, sessionsEnded: 1 });
   const me = await api().get('/api/v1/me').set(p.auth);
   assert.deepEqual(me.body.profiles.map((x) => x.id), [b.id]);
-  assert.equal(me.body.activeProfileId, null);               // session fell back to parent mode
+  assert.equal(me.body.activeProfileId, null);
   assert.equal(me.body.account.email, 'parent@example.org');
+  // the device that was playing as the deleted child is logged out (never moved into the parent area)
+  assert.equal((await api().get('/api/v1/me').set(asA)).body.error.code, 'SESSION_ENDED');
+  assert.equal((await api().post('/api/v1/auth/refresh').send({ refreshToken: tablet.body.refreshToken })).status, 401);
+  assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '1234', confirm: true })).status, 404, 'already deleted');
   // the username becomes available again
   assert.equal((await api().get('/api/v1/usernames/check').query({ username: 'child_aaa' })).body.available, true);
 });
@@ -112,11 +122,10 @@ test('deleting a parent account deletes every child profile', async () => {
   await addChild(p, { username: 'child_aaa' }); await addChild(p, { username: 'child_bbb' });
   assert.equal((await h.query('SELECT COUNT(*) n FROM profiles'))[0].n, 2);
   const r = await api().delete('/api/v1/me').set(p.auth).send({ password: 'Secret123', confirm: true });
-  assert.equal(r.status, 202);
-  const b = await h.adminLogin(await h.makeAdmin('boss@example.org'));
-  const ok = await api().post(`/api/v1/admin/deletion-requests/${r.body.requestId}/approve`).set(h.bearer(b.token)).send({ confirm: true });
-  assert.equal(ok.body.profilesDeleted, 2);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.profilesDeleted, 2);
   assert.equal((await h.query('SELECT COUNT(*) n FROM profiles'))[0].n, 0);
+  assert.equal((await h.query('SELECT COUNT(*) n FROM accounts'))[0].n, 0);
 });
 
 test('adult accounts cannot use parent-only endpoints', async () => {

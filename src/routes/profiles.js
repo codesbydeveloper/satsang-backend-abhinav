@@ -1,7 +1,7 @@
 const express = require('express');
 const { z } = require('zod');
 const config = require('../config');
-const { query } = require('../db');
+const { query, tx } = require('../db');
 const validate = require('../middleware/validate');
 const { requireAuth, requireParent } = require('../middleware/auth');
 const S = require('../utils/schemas');
@@ -12,6 +12,7 @@ const { ageOn, ageGroupForDob } = require('../utils/ageGroup');
 const { profileView, loadProfiles } = require('../utils/profiles');
 const { signAccessToken } = require('../utils/tokens');
 const { etDate } = require('../utils/time');
+const { deleteChildProfile } = require('../utils/accountDeletion');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -108,13 +109,16 @@ router.patch('/:id', validate(idParam, 'params'), validate(patchSchema), async (
   res.json({ profile: profileView(fresh, { own: true }) });
 });
 
-// Delete one child profile with the Parent PIN; the parent account and sibling profiles are untouched.
+// Delete one child profile and all its data with the Parent PIN (contract 3.4); the parent account and the other
+// children are untouched. From the parent area only. Devices playing as that child are logged out. Nothing about the
+// child is logged or kept.
 router.delete('/:id', requireParent, validate(idParam, 'params'), validate(z.object({ pin: S.pin, confirm: z.literal(true) })), async (req, res) => {
+  if (req.profileId) throw forbidden('PARENT_MODE_REQUIRED', 'Switch to the parent area first');
   const p = await ownedProfile(req);
+  if (!p.is_child) throw forbidden('NOT_A_CHILD_PROFILE', 'Only child profiles can be deleted this way');
   await verifyPin(req.account, req.body.pin);
-  await query('UPDATE refresh_tokens SET profile_id = NULL WHERE account_id = ? AND profile_id = ?', [req.account.id, p.id]);
-  await query('DELETE FROM profiles WHERE id = ?', [p.id]);   // cascades to progress, Sparks, items, leaderboard rows
-  res.json({ deleted: true });
+  const sessionsEnded = await tx((c) => deleteChildProfile(c, req.account.id, p.id));   // cascades to all its data
+  res.json({ deleted: true, profileId: p.id, sessionsEnded });
 });
 
 // Switch the device session to a child profile (needs the Parent PIN).

@@ -1,6 +1,7 @@
 const express = require('express');
 const { z } = require('zod');
-const { query } = require('../../db');
+const { query, tx } = require('../../db');
+const { deleteAccountCompletely } = require('../../utils/accountDeletion');
 const validate = require('../../middleware/validate');
 const { requireAdmin, requireRole } = require('../../middleware/adminAuth');
 const { notFound } = require('../../utils/errors');
@@ -56,11 +57,8 @@ router.delete('/:accountId', validate(z.object({ accountId: z.coerce.number().in
   validate(z.object({ confirm: z.literal(true), reason: z.string().trim().min(3).max(200) })), async (req, res) => {
     const a = (await query('SELECT id, account_type FROM accounts WHERE id = ?', [req.validated.params.accountId]))[0];
     if (!a) throw notFound('ACCOUNT_NOT_FOUND', 'Account not found');
-    const profileCount = (await query('SELECT COUNT(*) AS n FROM profiles WHERE account_id = ?', [a.id]))[0].n;
-    await query('DELETE FROM accounts WHERE id = ?', [a.id]);
-    // a pending request for this account is now done; close it so it leaves the queue
-    await query("UPDATE account_deletion_requests SET status = 'completed', profiles_deleted = ?, decided_by = ?, decided_at = UTC_TIMESTAMP(), decision_note = ? WHERE account_id = ? AND status = 'pending'",
-      [profileCount, req.admin.id, 'Deleted from the Users page', a.id]);
+    // a pending request for this account is now done: the shared service closes it so it leaves the queue
+    const { profilesDeleted: profileCount } = await tx((c) => deleteAccountCompletely(c, a, { decidedBy: req.admin.id, note: 'Deleted from the Users page' }));
     await audit(req, 'user.deleted', { entityType: 'account', entityId: a.id, details: { accountType: a.account_type, profilesDeleted: profileCount, reason: req.body.reason } });
     res.json({ deleted: true, accountId: a.id, profilesDeleted: profileCount });
   });

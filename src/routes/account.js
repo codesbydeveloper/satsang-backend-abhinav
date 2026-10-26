@@ -8,9 +8,9 @@ const { requireAuth } = require('../middleware/auth');
 const S = require('../utils/schemas');
 const { unauthorized, badRequest, forbidden, conflict, notFound } = require('../utils/errors');
 const { accountView, profileView, loadProfiles } = require('../utils/profiles');
-const { revokeAllRefreshTokens, signAccessToken } = require('../utils/tokens');
-const { startSession } = require('../utils/session');
-const { requestDeletion } = require('../utils/deletionRequests');
+const { signAccessToken } = require('../utils/tokens');
+const { deleteAccountCompletely } = require('../utils/accountDeletion');
+const { authLimiter } = require('../middleware/rateLimit');
 const { ageOn, ageGroupForDob } = require('../utils/ageGroup');
 const { checkUsername, lowerKey } = require('../utils/usernameFilter');
 const { verifyPin } = require('../utils/pin');
@@ -155,25 +155,62 @@ router.post('/profile', validate(z.object({ username: S.username, avatarId: S.av
   });
 });
 
-router.post('/change-password', validate(z.object({ currentPassword: z.string().min(1), newPassword: S.password })), async (req, res) => {
-  if (!(await bcrypt.compare(req.body.currentPassword, req.account.password_hash))) throw unauthorized('INVALID_CREDENTIALS', 'Current password is incorrect');
-  const hash = await bcrypt.hash(req.body.newPassword, config.bcryptRounds);
+/** A parent account playing as a child: account settings, password and deletion belong to the parent area. */
+function requireParentAreaIfParent(req) {
+  if (req.account.account_type === 'parent' && req.profileId) throw forbidden('PARENT_MODE_REQUIRED', 'Switch to the parent area first');
+}
+
+/**
+ * Settings for whoever is playing (contract 3.1: language and mode can change at any time).
+ * - Independent: language → the account and its profile; mode → its profile.
+ * - Parent area (no active profile): language → the account; there is no path to set (400 NO_ACTIVE_PROFILE).
+ * - A parent's child: refused (403 PARENT_MODE_REQUIRED); the parent sets a child's path and language in Edit child.
+ */
+router.patch('/settings', validate(z.object({ language: S.language.optional(), mode: S.mode.nullable().optional() })
+  .refine((b) => b.language !== undefined || b.mode !== undefined, 'Send language and/or mode')), async (req, res) => {
+  requireParentAreaIfParent(req);
+  const { language, mode } = req.body;
+  if (mode !== undefined && !req.profileId) throw badRequest('NO_ACTIVE_PROFILE', 'No profile is active on this device');
   await tx(async (c) => {
-    await c.query('UPDATE accounts SET password_hash = ?, token_version = token_version + 1 WHERE id = ?', [hash, req.account.id]);
-    await revokeAllRefreshTokens(req.account.id, c);   // every other device is logged out
+    if (language) await c.query('UPDATE accounts SET preferred_language = ? WHERE id = ?', [language, req.account.id]);
+    if (req.profileId && language) await c.query('UPDATE profiles SET language = ? WHERE id = ? AND account_id = ?', [language, req.profileId, req.account.id]);
+    if (req.profileId && mode !== undefined) await c.query('UPDATE profiles SET mode = ? WHERE id = ? AND account_id = ?', [mode, req.profileId, req.account.id]);
   });
-  const account = (await query('SELECT * FROM accounts WHERE id = ?', [req.account.id]))[0];
-  res.json(await startSession(account));                // this device gets a fresh session
+  const a = (await query('SELECT * FROM accounts WHERE id = ?', [req.account.id]))[0];
+  const p = req.profileId ? (await query('SELECT * FROM profiles WHERE id = ?', [req.profileId]))[0] : null;
+  res.json({ account: accountView(a), profile: p ? profileView(p, { own: true }) : null });
 });
 
 /**
- * Ask for the account to be deleted, after password verification. This files a deletion request;
- * when a Full Admin approves it, the account and (via cascading foreign keys) every profile and its
- * data are removed — for a parent account, every child profile too.
+ * Change the password (contract 3.5). Every OTHER device is logged out; this device stays logged in: the token
+ * version moves on (so every old access token stops working) and this session gets a new access token. Its
+ * refresh token stays valid.
  */
-router.delete('/', validate(z.object({ password: z.string().min(1), confirm: z.literal(true) })), async (req, res) => {
+router.post('/password', authLimiter, validate(z.object({ currentPassword: z.string().min(1), newPassword: S.password })), async (req, res) => {
+  requireParentAreaIfParent(req);
+  if (!(await bcrypt.compare(req.body.currentPassword, req.account.password_hash))) throw unauthorized('INVALID_CREDENTIALS', 'Current password is incorrect');
+  const hash = await bcrypt.hash(req.body.newPassword, config.bcryptRounds);
+  const ended = await tx(async (c) => {
+    await c.query('UPDATE accounts SET password_hash = ?, token_version = token_version + 1 WHERE id = ?', [hash, req.account.id]);
+    const r = await c.query('UPDATE refresh_tokens SET revoked_at = UTC_TIMESTAMP() WHERE account_id = ? AND session_id <> ? AND revoked_at IS NULL',
+      [req.account.id, req.sessionId || '']);
+    return r.affectedRows || 0;
+  });
+  const account = (await query('SELECT * FROM accounts WHERE id = ?', [req.account.id]))[0];
+  res.json({ accessToken: signAccessToken(account, req.profileId, req.sessionId), activeProfileId: req.profileId, otherSessionsEnded: ended });
+});
+
+/**
+ * Delete the account now (contract 3.4), after the password check. Everything goes in one transaction: the account,
+ * every profile (a parent's children too) and their data, and every session on every device. A completed row is
+ * kept in the deletion history (source app; ids and counts only). The public web page still files a request that a
+ * Full Admin approves.
+ */
+router.delete('/', authLimiter, validate(z.object({ password: z.string().min(1), confirm: z.literal(true) })), async (req, res) => {
+  requireParentAreaIfParent(req);
   if (!(await bcrypt.compare(req.body.password, req.account.password_hash))) throw unauthorized('INVALID_CREDENTIALS', 'Password is incorrect');
-  res.status(202).json(await requestDeletion(req.account, 'app'));
+  const { profilesDeleted } = await tx((c) => deleteAccountCompletely(c, req.account, { source: 'app' }));
+  res.json({ deleted: true, profilesDeleted });
 });
 
 module.exports = router;

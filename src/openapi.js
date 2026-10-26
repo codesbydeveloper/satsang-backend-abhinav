@@ -53,7 +53,8 @@ module.exports = {
       Admin: obj({ id: int(), email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), totpEnabled: bool() }),
       DeletionRequestFiled: obj({ requested: bool(), requestId: int(), status: str({ enum: ['pending'] }), requestedAt: str({ description: 'UTC' }) }),
       DeletionRequest: obj({
-        id: int(), accountId: int(), accountType: str({ enum: ['adult', 'parent'] }), source: str({ enum: ['app', 'web'], description: 'app = in the app, web = public delete-account page' }),
+        id: int(), accountId: int(), accountType: str({ enum: ['adult', 'parent'] }), source: str({ enum: ['app', 'web'], description: 'app = deleted in the app (always completed, no admin decision), web = public delete-account page (pending until a Full Admin decides)' }),
+        deletedByOwner: { type: 'boolean', description: 'True when the owner deleted the account in the app (completed, no admin decision)' },
         status: str({ enum: ['pending', 'completed', 'rejected'] }),
         username: str({ nullable: true, description: 'The adult’s own profile; null for parent accounts and once the account is deleted' }),
         email: str({ nullable: true, description: 'Null once the account is deleted' }), emailVerified: { type: 'boolean', nullable: true },
@@ -102,8 +103,14 @@ module.exports = {
     '/me': {
       get: op('Account', 'Current account, its profiles, and the active profile', { security: user, responses: { 200: ok('Account', obj({ account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) })), ...errors(401) } }),
       patch: op('Account', 'Update phone or language', { description: 'Parent accounts: only from the parent area; from a child’s session 403 `PARENT_MODE_REQUIRED`.', security: user, requestBody: body(obj({ phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }) }), false), responses: { 200: ok('Updated'), ...errors(400, 401, 403) } }),
-      delete: op('Account', 'Ask for the account to be deleted (password check). Files a deletion request; once a Full Admin approves it the account is deleted, and for a parent account every child profile too. Repeating the call returns the pending request.', {
-        security: user, requestBody: body(obj({ password: str(), confirm: { type: 'boolean', enum: [true] } }, ['password', 'confirm'])), responses: { 202: ok('Deletion request filed', ref('DeletionRequestFiled')), ...errors(400, 401) } }),
+      delete: op('Account', 'Delete the account now (password check). Irreversible.', {
+        description: 'Deletes at once, in one transaction: the account, every profile (for a parent account every child profile too) and all their data '
+          + '(progress, Sparks, Dress Up items, saved Shangars, referral link, leaderboard entries), and every session on every device. A completed '
+          + 'row (source `app`, ids and counts only) is kept in the deletion history; a pending web-page request for the account is closed. '
+          + 'The public delete-account web page still files a request that a Full Admin approves. Errors: 401 `INVALID_CREDENTIALS` (wrong password), '
+          + '403 `PARENT_MODE_REQUIRED` (a parent account while a child plays), 401 `ACCOUNT_DELETED` (already deleted: any call with a token of a deleted account answers this).',
+        security: user, requestBody: body(obj({ password: str(), confirm: { type: 'boolean', enum: [true] } }, ['password', 'confirm'])),
+        responses: { 200: ok('Deleted', obj({ deleted: bool(), profilesDeleted: int() })), ...errors(400, 401, 403, 429) } }),
     },
     '/me/profile': { post: op('Account', 'Independent accounts: create your own playable profile (once, after email verification)', {
       description: 'Uses the date of birth given at registration (it then lives on the profile only), makes the new profile '
@@ -127,8 +134,16 @@ module.exports = {
     '/me/children/{id}/activity': { get: op('Account', 'A child’s daily time for the parent area (parent accounts, parent area only)', {
       security: user, parameters: [idParam, { name: 'days', in: 'query', schema: int({ minimum: 1, maximum: 90, default: 7 }) }],
       responses: { 200: ok('Days, oldest first; missing days are 0', obj({ profileId: int(), timeZone: str(), today: str({ format: 'date' }), todaySeconds: int(), todayMinutes: int(), days: { type: 'array', items: obj({ day: str({ format: 'date' }), seconds: int(), minutes: int() }) } })), ...errors(400, 401, 403, 404) } }) },
-    '/me/change-password': { post: op('Account', 'Change password; other devices are logged out and this device gets fresh tokens', {
-      security: user, requestBody: body(obj({ currentPassword: str(), newPassword: str() }, ['currentPassword', 'newPassword'])), responses: { 200: ok('New session', ref('AuthResponse')), ...errors(400, 401) } }) },
+    '/me/password': { post: op('Account', 'Change the password; every other device is logged out, this one stays logged in', {
+      description: 'newPassword: 8–72 characters with a letter and a number. Every earlier access token stops working; use the returned one (the refresh token '
+        + 'of this device stays valid). Errors: 401 `INVALID_CREDENTIALS` (current password wrong), 400 `VALIDATION_ERROR`, 403 `PARENT_MODE_REQUIRED` (a parent account while a child plays).',
+      security: user, requestBody: body(obj({ currentPassword: str(), newPassword: str() }, ['currentPassword', 'newPassword'])),
+      responses: { 200: ok('Changed', obj({ accessToken: str(), activeProfileId: int({ nullable: true }), otherSessionsEnded: int() })), ...errors(400, 401, 403, 429) } }) },
+    '/me/settings': { patch: op('Account', 'Language and/or path (mode) for whoever is playing', {
+      description: 'Independent: language → the account and its profile, mode → its profile. Parent area: language → the account (mode: 400 `NO_ACTIVE_PROFILE`). '
+        + 'A parent’s child: 403 `PARENT_MODE_REQUIRED` (the parent sets a child’s path and language with PATCH /profiles/{id} from the parent area).',
+      security: user, requestBody: body(obj({ language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }) }), false),
+      responses: { 200: ok('Updated', obj({ account: ref('Account'), profile: { ...ref('Profile'), nullable: true } })), ...errors(400, 401, 403) } }) },
 
     '/profiles': {
       get: op('Profiles', 'List the account’s profiles', { security: user, responses: { 200: ok('Profiles'), ...errors(401) } }),
@@ -142,8 +157,11 @@ module.exports = {
         description: 'Parent area: any own child, no PIN. A parent session playing as one child editing a sibling: PIN required. The active profile itself: an adult changes avatar / language / mode; a parent’s child only its avatar (language or mode without the PIN: 403 `PIN_REQUIRED`; username: 403 `USERNAME_PARENT_ONLY`). Username errors: 400 `USERNAME_*`.',
         security: user, parameters: [idParam], requestBody: body(obj({ username: str(), avatarId: int(), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), pin: str() }), false),
         responses: { 200: ok('Updated', obj({ profile: ref('Profile') })), ...errors(400, 401, 403, 404, 429) } }),
-      delete: op('Profiles', 'Delete one child profile with the Parent PIN; the parent account and siblings are unaffected', {
-        security: user, parameters: [idParam], requestBody: body(obj({ pin: str(), confirm: { type: 'boolean', enum: [true] } }, ['pin', 'confirm'])), responses: { 200: ok('Deleted'), ...errors(400, 401, 403, 404, 429) } }),
+      delete: op('Profiles', 'Delete one child profile and all its data with the Parent PIN; the parent account and other children are unaffected', {
+        description: 'Parent area only (403 `PARENT_MODE_REQUIRED` while a child plays; 403 `NOT_A_CHILD_PROFILE`). Irreversible. Devices playing as that child are logged out. '
+          + 'PIN errors: 401 `PIN_INCORRECT` (details.attemptsLeft), 429 `PIN_LOCKED` (details.retryAfterSeconds).',
+        security: user, parameters: [idParam], requestBody: body(obj({ pin: str(), confirm: { type: 'boolean', enum: [true] } }, ['pin', 'confirm'])),
+        responses: { 200: ok('Deleted', obj({ deleted: bool(), profileId: int(), sessionsEnded: int() })), ...errors(400, 401, 403, 404, 429) } }),
     },
     '/profiles/{id}/switch': { post: op('Profiles', 'Switch this device to a child profile (Parent PIN required)', {
       security: user, parameters: [idParam], requestBody: body(obj({ pin: str() }, ['pin'])), responses: { 200: ok('New access token for the child profile'), ...errors(401, 403, 404, 429) } }) },

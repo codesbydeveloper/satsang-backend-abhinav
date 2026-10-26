@@ -5,6 +5,7 @@ const validate = require('../../middleware/validate');
 const { requireAdmin, requireRole } = require('../../middleware/adminAuth');
 const { notFound, conflict } = require('../../utils/errors');
 const { audit } = require('../../utils/audit');
+const { deleteAccountCompletely } = require('../../utils/accountDeletion');
 
 const router = express.Router();
 router.use(requireAdmin, requireRole('full_admin'));   // user data is Full Admin only
@@ -30,6 +31,7 @@ const row = (r) => {
     emailVerified: gone ? null : !!r.email_verified_at,
     childProfiles: gone ? (r.account_type === 'parent' ? r.profiles_deleted : 0) : Number(r.child_profiles),
     profilesDeleted: r.profiles_deleted, requestedAt: r.requested_at,
+    deletedByOwner: r.status === 'completed' && !r.decided_by,   // deleted in the app (DELETE /me): no admin decided
     decidedAt: r.decided_at, decidedBy: r.decided_by ? { id: r.decided_by, name: r.decided_by_name } : null, decisionNote: r.decision_note,
   };
 };
@@ -92,10 +94,8 @@ async function lockPending(c, id) {
 router.post('/:id/approve', idParam, validate(z.object({ confirm: z.literal(true), note: z.string().trim().max(200).optional() })), async (req, res) => {
   const result = await tx(async (c) => {
     const r = await lockPending(c, req.validated.params.id);
-    const profilesDeleted = Number((await c.query('SELECT COUNT(*) AS n FROM profiles WHERE account_id = ?', [r.account_id]))[0].n);
-    await c.query('DELETE FROM accounts WHERE id = ?', [r.account_id]);
-    await c.query("UPDATE account_deletion_requests SET status = 'completed', profiles_deleted = ?, decided_by = ?, decided_at = UTC_TIMESTAMP(), decision_note = ? WHERE id = ?",
-      [profilesDeleted, req.admin.id, req.body.note || null, r.id]);
+    const { profilesDeleted } = await deleteAccountCompletely(c, { id: r.account_id, account_type: r.account_type },
+      { decidedBy: req.admin.id, note: req.body.note || null });   // also completes this request
     return { r, profilesDeleted };
   });
   const { r, profilesDeleted } = result;
