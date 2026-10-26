@@ -111,7 +111,9 @@ router.get('/', async (req, res) => {
   res.json({ account: accountView(req.account), profiles: profiles.map((p) => profileView(p, { own: true })), activeProfileId: req.profileId });
 });
 
+// Account settings. A parent account's settings change only in the parent area, never from a child's session.
 router.patch('/', validate(z.object({ phone: S.phone.nullable().optional(), language: S.language.optional() })), async (req, res) => {
+  if (req.account.account_type === 'parent' && req.profileId) throw forbidden('PARENT_MODE_REQUIRED', 'Switch to the parent area first');
   const { phone, language } = req.body;
   if (phone !== undefined) await query('UPDATE accounts SET phone = ? WHERE id = ?', [phone, req.account.id]);
   if (language) await query('UPDATE accounts SET preferred_language = ? WHERE id = ?', [language, req.account.id]);

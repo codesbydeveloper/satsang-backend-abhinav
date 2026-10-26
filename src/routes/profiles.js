@@ -80,7 +80,8 @@ router.post('/', requireParent, validate(createSchema), async (req, res) => {
 // Change username / avatar / language / mode.
 // - Parent in the parent area: any of their children, no PIN (the area itself is PIN-protected).
 // - Parent session playing as one child, editing a sibling: PIN required.
-// - The active profile itself (child or adult): avatar / language / mode only; a username change is parent-only.
+// - The active profile itself: an adult changes avatar / language / mode; a parent's child only its avatar. A child's
+//   path, language and username are sensitive settings (contract 3.3): parent area or the Parent PIN.
 const patchSchema = z.object({
   username: S.username.optional(), avatarId: S.avatarId.optional(), language: S.language.optional(),
   mode: S.mode.nullable().optional(), pin: S.pin.optional(),
@@ -91,6 +92,9 @@ router.patch('/:id', validate(idParam, 'params'), validate(patchSchema), async (
   if (isParent && req.profileId && req.profileId !== p.id) await verifyPin(req.account, req.body.pin || '');
   else if (isParent && req.body.pin !== undefined) await verifyPin(req.account, req.body.pin);
   const { username, avatarId, language, mode } = req.body;
+  if (isParent && req.profileId === p.id && req.body.pin === undefined && (language !== undefined || mode !== undefined)) {
+    throw forbidden('PIN_REQUIRED', "A parent changes this child's path and language (Parent PIN)");
+  }
   if (username !== undefined) {
     if (!isParent || (req.profileId === p.id && req.body.pin === undefined)) throw forbidden('USERNAME_PARENT_ONLY', 'Only a parent can change this username');
     const u = await checkUsername(username, { excludeProfileId: p.id });

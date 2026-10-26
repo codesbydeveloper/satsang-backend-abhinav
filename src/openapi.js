@@ -101,7 +101,7 @@ module.exports = {
 
     '/me': {
       get: op('Account', 'Current account, its profiles, and the active profile', { security: user, responses: { 200: ok('Account', obj({ account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) })), ...errors(401) } }),
-      patch: op('Account', 'Update phone or language', { security: user, requestBody: body(obj({ phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }) }), false), responses: { 200: ok('Updated'), ...errors(400, 401) } }),
+      patch: op('Account', 'Update phone or language', { description: 'Parent accounts: only from the parent area; from a child’s session 403 `PARENT_MODE_REQUIRED`.', security: user, requestBody: body(obj({ phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }) }), false), responses: { 200: ok('Updated'), ...errors(400, 401, 403) } }),
       delete: op('Account', 'Ask for the account to be deleted (password check). Files a deletion request; once a Full Admin approves it the account is deleted, and for a parent account every child profile too. Repeating the call returns the pending request.', {
         security: user, requestBody: body(obj({ password: str(), confirm: { type: 'boolean', enum: [true] } }, ['password', 'confirm'])), responses: { 202: ok('Deletion request filed', ref('DeletionRequestFiled')), ...errors(400, 401) } }),
     },
@@ -139,9 +139,9 @@ module.exports = {
     },
     '/profiles/{id}': {
       patch: op('Profiles', 'Change username, avatar, language or mode', {
-        description: 'Parent area: any own child, no PIN. A parent session playing as one child editing a sibling: PIN required. The active profile itself: avatar / language / mode only (username: 403 `USERNAME_PARENT_ONLY`). Username errors: 400 `USERNAME_*`.',
+        description: 'Parent area: any own child, no PIN. A parent session playing as one child editing a sibling: PIN required. The active profile itself: an adult changes avatar / language / mode; a parent’s child only its avatar (language or mode without the PIN: 403 `PIN_REQUIRED`; username: 403 `USERNAME_PARENT_ONLY`). Username errors: 400 `USERNAME_*`.',
         security: user, parameters: [idParam], requestBody: body(obj({ username: str(), avatarId: int(), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), pin: str() }), false),
-        responses: { 200: ok('Updated', obj({ profile: ref('Profile') })), ...errors(400, 401, 404, 429) } }),
+        responses: { 200: ok('Updated', obj({ profile: ref('Profile') })), ...errors(400, 401, 403, 404, 429) } }),
       delete: op('Profiles', 'Delete one child profile with the Parent PIN; the parent account and siblings are unaffected', {
         security: user, parameters: [idParam], requestBody: body(obj({ pin: str(), confirm: { type: 'boolean', enum: [true] } }, ['pin', 'confirm'])), responses: { 200: ok('Deleted'), ...errors(400, 401, 403, 404, 429) } }),
     },

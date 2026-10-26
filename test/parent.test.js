@@ -90,10 +90,28 @@ test('edit child: username / avatar / path from the parent area; a child cannot 
   const asA = bearer((await switchTo(p.auth, a.id)).body.accessToken);
   assert.equal((await api().patch(`/api/v1/profiles/${a.id}`).set(asA).send({ username: 'renamed_me' })).body.error.code, 'USERNAME_PARENT_ONLY');
   assert.equal((await api().patch(`/api/v1/profiles/${a.id}`).set(asA).send({ avatarId: 3 })).status, 200, 'own avatar is fine');
+  // path and language are the parent's (contract 3.3): refused from the child's session without the PIN
+  for (const body of [{ mode: 'sanatan' }, { language: 'gu' }, { avatarId: 4, mode: null }]) {
+    const refused = await api().patch(`/api/v1/profiles/${a.id}`).set(asA).send(body);
+    assert.equal(refused.status, 403, JSON.stringify(body));
+    assert.equal(refused.body.error.code, 'PIN_REQUIRED');
+  }
+  const withPin = await api().patch(`/api/v1/profiles/${a.id}`).set(asA).send({ language: 'gu', pin: '1234' });
+  assert.equal(withPin.status, 200);
+  assert.equal(withPin.body.profile.language, 'gu');
+  assert.equal(withPin.body.profile.avatarId, 3, 'the refused request changed nothing');
+  // nor the parent's account settings
+  assert.equal((await api().patch('/api/v1/me').set(asA).send({ language: 'gu' })).body.error.code, 'PARENT_MODE_REQUIRED');
+  assert.equal((await api().patch('/api/v1/me').set(asA).send({ phone: '+1 555 0100' })).body.error.code, 'PARENT_MODE_REQUIRED');
   assert.equal((await api().patch(`/api/v1/profiles/${b.id}`).set(asA).send({ avatarId: 3 })).status, 401, 'sibling needs the PIN');
   assert.equal((await api().patch(`/api/v1/profiles/${b.id}`).set(asA).send({ avatarId: 3, pin: '1234' })).status, 200);
   // adding a child from a child's session is refused
   assert.equal((await api().post('/api/v1/profiles').set(asA).send({ username: 'third_kid', avatarId: 1, dob: h.dobYearsAgo(6), parentalConsent: true })).body.error.code, 'PARENT_MODE_REQUIRED');
+
+  // back in the parent area (PIN), account settings and Edit child work again
+  const parentArea = bearer((await switchTo(asA, null, '1234')).body.accessToken);
+  assert.equal((await api().patch('/api/v1/me').set(parentArea).send({ language: 'gu' })).status, 200, 'the parent area may');
+  assert.equal((await api().patch(`/api/v1/profiles/${a.id}`).set(parentArea).send({ mode: 'sanatan' })).status, 200, 'and so may Edit child');
 });
 
 test('daily time: beats count once per minute, into the Eastern day, up to 1 day back; parents read 7 days', async () => {
