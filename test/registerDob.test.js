@@ -9,7 +9,7 @@ beforeEach(h.resetDb);
 after(() => h.pool.end());
 
 const register = (email, dob, extra = {}) => api().post('/api/v1/auth/register')
-  .send({ email, password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, dob, ...extra });
+  .send({ ...h.NAMES, email, password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, dob, ...extra });
 
 /** Register with dob only + verify; returns the AuthResponse (no profile yet). */
 async function independentLogin(email = 'meera@example.org', years = 25) {
@@ -53,11 +53,11 @@ test('exactly the consent age may hold an independent account', async () => {
 });
 
 test('dob rules: required for independent, not accepted for parents, not both dob and profile', async () => {
-  const none = await api().post('/api/v1/auth/register').send({ email: 'x@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true });
+  const none = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'x@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true });
   assert.equal(none.status, 400); assert.equal(none.body.error.code, 'VALIDATION_ERROR');
   assert.equal(none.body.error.details[0].field, 'dob');
 
-  const parent = await api().post('/api/v1/auth/register').send({ email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true, dob: h.dobYearsAgo(40) });
+  const parent = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true, dob: h.dobYearsAgo(40) });
   assert.equal(parent.status, 400); assert.equal(parent.body.error.code, 'VALIDATION_ERROR');
 
   const both = await register('b@example.org', h.dobYearsAgo(30), { profile: { username: 'both_ways', avatarId: 1, dob: h.dobYearsAgo(30) } });

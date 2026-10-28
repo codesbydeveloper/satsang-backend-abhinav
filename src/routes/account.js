@@ -15,6 +15,10 @@ const { ageOn, ageGroupForDob } = require('../utils/ageGroup');
 const { checkUsername, lowerKey } = require('../utils/usernameFilter');
 const { verifyPin } = require('../utils/pin');
 const { TZ, etDate, toSql } = require('../utils/time');
+const { signupBonusOf } = require('../utils/signupBonus');
+
+/** Private Sign Up details of the account owner (null for accounts created before they were asked). */
+const ownerDetails = (a) => ({ firstName: a.first_name || null, lastName: a.last_name || null, gender: a.gender || null });
 
 const router = express.Router();
 router.use(requireAuth);
@@ -106,9 +110,14 @@ router.get('/children/:id/activity', validate(z.object({ id: z.coerce.number().i
     res.json({ profileId: id, timeZone: TZ, today, todaySeconds: t.seconds, todayMinutes: t.minutes, days: list });
   });
 
+// The owner's own view: also the private Sign Up details (name, gender) and the reserved sign-up bonus. These are
+// returned here only (never in login/refresh responses, other users' views or admin lists), and never logged.
 router.get('/', async (req, res) => {
   const profiles = await loadProfiles(req.account.id);
-  res.json({ account: accountView(req.account), profiles: profiles.map((p) => profileView(p, { own: true })), activeProfileId: req.profileId });
+  res.json({
+    account: { ...accountView(req.account), ...ownerDetails(req.account), signupBonus: await signupBonusOf(req.account.id) },
+    profiles: profiles.map((p) => profileView(p, { own: true })), activeProfileId: req.profileId,
+  });
 });
 
 // Account settings. A parent account's settings change only in the parent area, never from a child's session.

@@ -31,7 +31,7 @@ router.get('/', validate(z.object({ q: z.string().trim().max(100).default(''), p
 
 // The "View" page: one account with all its playable profiles. Never returns the password or Parent PIN hashes.
 router.get('/:accountId', validate(z.object({ accountId: z.coerce.number().int().positive() }), 'params'), async (req, res) => {
-  const a = (await query(`SELECT id, email, account_type, phone, preferred_language, email_verified_at, parent_pin_hash IS NOT NULL AS pin_set,
+  const a = (await query(`SELECT id, email, account_type, phone, preferred_language, first_name, last_name, gender, email_verified_at, parent_pin_hash IS NOT NULL AS pin_set,
                                  privacy_policy_version, consent_accepted_at, created_at FROM accounts WHERE id = ?`, [req.validated.params.accountId]))[0];
   if (!a) throw notFound('ACCOUNT_NOT_FOUND', 'Account not found');
   const profiles = await query(
@@ -41,6 +41,8 @@ router.get('/:accountId', validate(z.object({ accountId: z.coerce.number().int()
   res.json({
     account: {
       id: a.id, email: a.email, accountType: a.account_type, phone: a.phone, language: a.preferred_language,
+      // private Sign Up details: on this detail page only, never in the user list
+      firstName: a.first_name, lastName: a.last_name, gender: a.gender,
       emailVerified: !!a.email_verified_at, emailVerifiedAt: a.email_verified_at, parentPinSet: !!a.pin_set,
       privacyPolicyVersion: a.privacy_policy_version, consentAcceptedAt: a.consent_accepted_at, createdAt: a.created_at,
     },

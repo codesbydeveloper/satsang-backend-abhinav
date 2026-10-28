@@ -15,7 +15,9 @@ function errorHandler(err, req, res, _next) {
   if (err && err.code === 'ER_DUP_ENTRY') {
     return res.status(409).json({ error: { code: 'DUPLICATE', message: 'That value is already in use' } });
   }
-  console.error('UNHANDLED', req.method, req.originalUrl, err);
+  // Never the request body or a database error's SQL/values: those may hold names, dates of birth or emails.
+  const where = err && err.stack ? err.stack.split('\n').slice(0, 6).join('\n') : String(err);
+  console.error('UNHANDLED', req.method, req.path, err && err.code, where);
   res.status(500).json({ error: { code: 'INTERNAL', message: config.env === 'production' ? 'Something went wrong' : String(err.message) } });
 }
 

@@ -11,7 +11,8 @@ const { badRequest, unauthorized, forbidden, conflict } = require('../utils/erro
 const { issueCode, consumeCode } = require('../utils/emailCodes');
 const { sendVerificationCode, sendPasswordResetCode } = require('../utils/mailer');
 const { revokeAllRefreshTokens, sha256 } = require('../utils/tokens');
-const { ageOn, ageGroupForDob } = require('../utils/ageGroup');
+const { ageOn, ageGroupForDob, isValidDob } = require('../utils/ageGroup');
+const { reserveSignupBonus } = require('../utils/signupBonus');
 const { checkUsername, lowerKey } = require('../utils/usernameFilter');
 const { startSession, createRefresh, buildAuthResponse } = require('../utils/session');
 const { loadProfiles } = require('../utils/profiles');
@@ -30,6 +31,10 @@ const registerSchema = z.object({
   language: S.language.default('en'),
   acceptPrivacyPolicy: z.literal(true, { error: 'You must accept the privacy policy' }),
   confirmAdult: z.boolean().optional(),                       // parents confirm they are 18+
+  // Both account types: the account owner's own name and gender. Private: GET /me and the admin user detail only.
+  firstName: S.personName,
+  lastName: S.personName,
+  gender: S.gender,
   // Independent ("adult") accounts: date of birth only. Username and avatar come later (POST /me/profile).
   dob: S.dob.optional(),
   // Older one-step form for independent accounts (username, avatar and dob together). Still accepted.
@@ -47,14 +52,22 @@ const registerSchema = z.object({
 // Neutral wording: never reveals the cut-off age (contract 4.1).
 const PARENT_ACCOUNT_MESSAGE = 'Please ask a parent to create a Parent account for you.';
 
-router.post('/register', authLimiter, validate(registerSchema), async (req, res) => {
+/**
+ * Independent accounts: the age gate runs first, before any other field is validated, looked at or stored. Under the
+ * regional consent age the user needs a parent account: 400 PARENT_ACCOUNT_REQUIRED, nothing is saved and nothing is
+ * revealed (not whether the email is registered, nor which other field would have been wrong). A missing or invalid
+ * dob is left to the schema (VALIDATION_ERROR).
+ */
+const ageGateFirst = (req, _res, next) => {
+  const b = req.body && typeof req.body === 'object' ? req.body : {};
+  if (b.accountType !== 'adult') return next();
+  const dob = typeof b.dob === 'string' ? b.dob : (b.profile && typeof b.profile.dob === 'string' ? b.profile.dob : null);
+  if (dob && isValidDob(dob) && ageOn(dob) < config.parentalConsentAge) return next(badRequest('PARENT_ACCOUNT_REQUIRED', PARENT_ACCOUNT_MESSAGE));
+  next();
+};
+
+router.post('/register', authLimiter, ageGateFirst, validate(registerSchema), async (req, res) => {
   const b = req.body;
-  if (b.accountType === 'adult') {
-    // Age gate first, before anything else is looked at or stored: under the regional consent age the user needs a
-    // parent account. Nothing is saved and nothing is revealed (not even whether the email is registered).
-    const dob = b.profile ? b.profile.dob : b.dob;
-    if (ageOn(dob) < config.parentalConsentAge) throw badRequest('PARENT_ACCOUNT_REQUIRED', PARENT_ACCOUNT_MESSAGE);
-  }
   if (b.profile) {
     const u = await checkUsername(b.profile.username);
     if (!u.ok) throw badRequest('USERNAME_' + u.reason, 'That username cannot be used');
@@ -64,11 +77,12 @@ router.post('/register', authLimiter, validate(registerSchema), async (req, res)
   const hash = await bcrypt.hash(b.password, config.bcryptRounds);
   const accountId = await tx(async (c) => {
     const r = await c.query(
-      `INSERT INTO accounts (email, password_hash, account_type, phone, preferred_language, dob, privacy_policy_version, consent_accepted_at)
-       VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP())`,
+      `INSERT INTO accounts (email, password_hash, account_type, phone, preferred_language, first_name, last_name, gender, dob,
+                             privacy_policy_version, consent_accepted_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP())`,
       // the dob waits on the account only until POST /me/profile creates the profile (it is then cleared)
-      [b.email, hash, b.accountType, b.phone || null, b.language, b.accountType === 'adult' && !b.profile ? b.dob : null,
-        config.privacyPolicyVersion]);
+      [b.email, hash, b.accountType, b.phone || null, b.language, b.firstName, b.lastName, b.gender,
+        b.accountType === 'adult' && !b.profile ? b.dob : null, config.privacyPolicyVersion]);
     if (b.profile) {
       const p = b.profile;
       await c.query(
@@ -88,6 +102,7 @@ router.post('/verify-email', authLimiter, validate(z.object({ email: S.email, co
   if (!account) throw badRequest('CODE_INVALID', 'That code is invalid or has expired. Request a new one.');
   await consumeCode(account.id, 'verify_email', req.body.code);
   await query('UPDATE accounts SET email_verified_at = COALESCE(email_verified_at, UTC_TIMESTAMP()) WHERE id = ?', [account.id]);
+  await reserveSignupBonus(account.id);   // "Receive 100 Sparks": reserved once, credited in Milestone 2
   account.email_verified_at = account.email_verified_at || toSql();
   res.json(await startSession(account));
 });

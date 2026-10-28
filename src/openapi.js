@@ -49,6 +49,15 @@ module.exports = {
         dob: str({ format: 'date', description: 'Only returned to the profile’s own account.' }), createdAt: str(),
       }),
       Account: obj({ id: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }), emailVerified: bool(), parentPinSet: bool() }),
+      AccountOwnerView: {
+        description: 'GET /me only: the Account plus the owner’s private Sign Up details and the reserved sign-up bonus. Never in login/refresh responses, other users’ views or admin lists.',
+        allOf: [ref('Account'), obj({
+          firstName: str({ nullable: true, description: 'Private. Null for accounts created before Sign Up asked for it.' }),
+          lastName: str({ nullable: true, description: 'Private.' }),
+          gender: str({ enum: ['male', 'female', 'prefer_not_to_say'], nullable: true, description: 'Private.' }),
+          signupBonus: { ...obj({ sparks: int({ example: 100 }), status: str({ enum: ['pending', 'credited'], description: 'pending = reserved at email verification; credited to the Sparks ledger in Milestone 2' }) }), nullable: true },
+        })],
+      },
       AuthResponse: obj({ accessToken: str(), refreshToken: str(), account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) }),
       Admin: obj({ id: int(), email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), totpEnabled: bool() }),
       DeletionRequestFiled: obj({ requested: bool(), requestId: int(), status: str({ enum: ['pending'] }), requestedAt: str({ description: 'UTC' }) }),
@@ -79,16 +88,24 @@ module.exports = {
         + 'before anything else. Under the regional consent age (PARENTAL_CONSENT_AGE) the answer is 400 '
         + '`PARENT_ACCOUNT_REQUIRED` and nothing is stored (this check runs before the email check). The username and '
         + 'avatar are chosen after email verification with POST /me/profile. The older one-step `profile` object is still '
-        + 'accepted instead of `dob`. Parent accounts send `confirmAdult: true` and no date of birth.',
+        + 'accepted instead of `dob`. Parent accounts send `confirmAdult: true` and no date of birth. Both account types send '
+        + 'the owner’s `firstName`, `lastName` (letters of any script, spaces, - and apostrophes only; 1–50 characters after trimming; a '
+        + 'typographic apostrophe is stored as a plain one) and `gender`. These are private: returned only by GET /me and the Admin Panel '
+        + 'user detail, never logged. Under the consent age the 400 `PARENT_ACCOUNT_REQUIRED` comes before any other field is '
+        + 'validated (no field errors are revealed). Verifying the email reserves the 100 sign-up Sparks (GET /me `signupBonus`).',
       requestBody: body(obj({
         email: str(), password: str({ description: '8–72 chars, at least one letter and one number' }), accountType: str({ enum: ['adult', 'parent'] }),
         phone: str({ description: 'Optional contact only — never used to log in' }), language: str({ enum: ['en', 'gu'] }),
+        firstName: str({ maxLength: 50, example: 'Meera', description: 'Private. Letters, spaces, - and apostrophes only' }),
+        lastName: str({ maxLength: 50, example: 'Patel', description: 'Private. Letters, spaces, - and apostrophes only' }),
+        gender: str({ enum: ['male', 'female', 'prefer_not_to_say'], description: 'Private' }),
         acceptPrivacyPolicy: { type: 'boolean', enum: [true] }, confirmAdult: { type: 'boolean', description: 'Required for parent accounts' },
         dob: str({ format: 'date', description: 'Independent accounts: date of birth (YYYY-MM-DD). Never returned by the API. Not accepted for parents.' }),
         profile: obj({ username: str(), avatarId: int(), dob: str({ format: 'date' }), mode: str({ enum: ['sanatan', 'satsang'] }) }, ['username', 'avatarId', 'dob']),
-      }, ['email', 'password', 'accountType', 'acceptPrivacyPolicy'])),
+      }, ['email', 'password', 'accountType', 'acceptPrivacyPolicy', 'firstName', 'lastName', 'gender'])),
       responses: { 201: ok('Account created, verification email sent', obj({ needsEmailVerification: { type: 'boolean' }, email: str() })), ...errors(400, 409, 429) } }) },
     '/auth/verify-email': { post: op('Auth', 'Confirm the 6-digit email code and start a session', {
+      description: 'The first verification also reserves the 100 sign-up Sparks for the account (once; credited in Milestone 2).',
       requestBody: body(obj({ email: str(), code: str() }, ['email', 'code'])), responses: { 200: ok('Logged in', ref('AuthResponse')), ...errors(400, 429) } }) },
     '/auth/resend-code': { post: op('Auth', 'Send a new verification code (always answers ok)', { requestBody: body(obj({ email: str() }, ['email'])), responses: { 200: ok('ok'), ...errors(429) } }) },
     '/auth/login': { post: op('Auth', 'Log in with email + password', {
@@ -101,7 +118,7 @@ module.exports = {
       requestBody: body(obj({ email: str(), code: str(), newPassword: str() }, ['email', 'code', 'newPassword'])), responses: { 200: ok('ok'), ...errors(400, 429) } }) },
 
     '/me': {
-      get: op('Account', 'Current account, its profiles, and the active profile', { security: user, responses: { 200: ok('Account', obj({ account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) })), ...errors(401) } }),
+      get: op('Account', 'Current account, its profiles, and the active profile', { description: 'The account includes the owner’s private firstName, lastName, gender and the reserved signupBonus (AccountOwnerView).', security: user, responses: { 200: ok('Account', obj({ account: ref('AccountOwnerView'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) })), ...errors(401) } }),
       patch: op('Account', 'Update phone or language', { description: 'Parent accounts: only from the parent area; from a child’s session 403 `PARENT_MODE_REQUIRED`.', security: user, requestBody: body(obj({ phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }) }), false), responses: { 200: ok('Updated'), ...errors(400, 401, 403) } }),
       delete: op('Account', 'Delete the account now (password check). Irreversible.', {
         description: 'Deletes at once, in one transaction: the account, every profile (for a parent account every child profile too) and all their data '
@@ -212,6 +229,7 @@ module.exports = {
       security: admin, parameters: [{ name: 'accountId', in: 'path', required: true, schema: int() }],
       responses: { 200: ok('Account detail', obj({
         account: obj({ id: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }),
+          firstName: str({ nullable: true, description: 'Private: this detail page only' }), lastName: str({ nullable: true }), gender: str({ enum: ['male', 'female', 'prefer_not_to_say'], nullable: true }),
           emailVerified: bool(), emailVerifiedAt: str({ nullable: true, description: 'UTC' }), parentPinSet: bool(),
           privacyPolicyVersion: str({ nullable: true }), consentAcceptedAt: str({ nullable: true, description: 'UTC' }), createdAt: str({ description: 'UTC' }) }),
         profiles: { type: 'array', items: obj({ id: int(), username: str(), avatarId: int(), avatarKey: str(), dob: str({ format: 'date' }), age: int(),

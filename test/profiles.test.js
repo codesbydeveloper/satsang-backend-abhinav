@@ -9,7 +9,7 @@ after(() => h.pool.end());
 const addChild = (p, over = {}) => api().post('/api/v1/profiles').set(p.auth).send({ pin: '1234', username: 'little_ram', avatarId: 2, dob: h.dobYearsAgo(8, 30), parentalConsent: true, ...over });
 
 test('parent starts in parent mode with no profiles; the first child comes before the PIN, the second needs it', async () => {
-  const reg = await api().post('/api/v1/auth/register').send({ email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true });
+  const reg = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true });
   assert.equal(reg.status, 201);
   const v = await api().post('/api/v1/auth/verify-email').send({ email: 'p@example.org', code: h.lastCode('p@example.org') });
   assert.equal(v.body.activeProfileId, null);
@@ -29,9 +29,9 @@ test('parent starts in parent mode with no profiles; the first child comes befor
 });
 
 test('parent registration requires confirming 18+ and cannot carry a profile', async () => {
-  const a = await api().post('/api/v1/auth/register').send({ email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true });
+  const a = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true });
   assert.equal(a.status, 400);
-  const b = await api().post('/api/v1/auth/register').send({ email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true, profile: { username: 'abcd', avatarId: 1, dob: h.dobYearsAgo(40) } });
+  const b = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true, profile: { username: 'abcd', avatarId: 1, dob: h.dobYearsAgo(40) } });
   assert.equal(b.status, 400);
 });
 
@@ -147,7 +147,7 @@ test('avatars: exactly 16 (10 animal + 6 human); invalid avatar id rejected', as
   assert.equal(r.body.avatars.length, 16);
   assert.equal(r.body.avatars.filter((a) => a.kind === 'animal').length, 10);
   assert.equal(r.body.avatars.filter((a) => a.kind === 'human').length, 6);
-  const bad = await api().post('/api/v1/auth/register').send({ email: 'x@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'xxxx', avatarId: 17, dob: h.dobYearsAgo(30) } });
+  const bad = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'x@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'xxxx', avatarId: 17, dob: h.dobYearsAgo(30) } });
   assert.equal(bad.status, 400);
 });
 

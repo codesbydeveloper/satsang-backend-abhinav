@@ -13,7 +13,7 @@ async function resetDb() {
   // tests TRUNCATE tables — never allow them to run against a real database
   if (!/_test$/.test(require('../src/config').db.database)) throw new Error('Refusing to run tests: DB_NAME in .env.test must end with _test');
   await query('SET FOREIGN_KEY_CHECKS = 0');
-  for (const t of ['account_deletion_requests', 'audit_log', 'profile_activity_minutes', 'profile_daily_activity', 'refresh_tokens', 'email_codes', 'profiles', 'accounts', 'admins']) await query(`TRUNCATE TABLE ${t}`);
+  for (const t of ['account_deletion_requests', 'audit_log', 'profile_activity_minutes', 'profile_daily_activity', 'refresh_tokens', 'email_codes', 'signup_bonuses', 'profiles', 'accounts', 'admins']) await query(`TRUNCATE TABLE ${t}`);
   await query('SET FOREIGN_KEY_CHECKS = 1');
   outbox.length = 0;
 }
@@ -31,7 +31,7 @@ const dobYearsAgo = (years, extraDays = 0) => {
 /** Register + verify an adult account; returns the AuthResponse body. */
 async function adultLogin(email = 'ravi@example.org', username = 'ravi_k', extra = {}) {
   const reg = await api().post('/api/v1/auth/register').send({
-    email, password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true,
+    email, password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, ...NAMES,
     profile: { username, avatarId: 3, dob: dobYearsAgo(30), mode: 'satsang' }, ...extra });
   if (reg.status !== 201) throw new Error('register failed: ' + JSON.stringify(reg.body));
   const v = await api().post('/api/v1/auth/verify-email').send({ email, code: lastCode(email) });
@@ -41,7 +41,7 @@ async function adultLogin(email = 'ravi@example.org', username = 'ravi_k', extra
 
 /** Register + verify a parent, set PIN 1234. */
 async function parentLogin(email = 'parent@example.org') {
-  const reg = await api().post('/api/v1/auth/register').send({ email, password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true });
+  const reg = await api().post('/api/v1/auth/register').send({ email, password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true, ...NAMES });
   if (reg.status !== 201) throw new Error('register failed: ' + JSON.stringify(reg.body));
   const v = await api().post('/api/v1/auth/verify-email').send({ email, code: lastCode(email) });
   const auth = { Authorization: `Bearer ${v.body.accessToken}` };
@@ -49,6 +49,9 @@ async function parentLogin(email = 'parent@example.org') {
   if (pin.status !== 201) throw new Error('pin failed: ' + JSON.stringify(pin.body));
   return { ...v.body, auth };
 }
+
+/** The private Sign Up details every register now sends (both account types). */
+const NAMES = { firstName: 'Ravi', lastName: 'Kumar', gender: 'male' };
 
 const bearer = (t) => ({ Authorization: `Bearer ${t}` });
 
@@ -72,4 +75,4 @@ async function adminLogin(admin, secretIfKnown) {
   return { token: v.body.token, secret: secretIfKnown };
 }
 
-module.exports = { api, resetDb, lastCode, dobYearsAgo, adultLogin, parentLogin, bearer, makeAdmin, adminLogin, query, pool, outbox };
+module.exports = { NAMES, api, resetDb, lastCode, dobYearsAgo, adultLogin, parentLogin, bearer, makeAdmin, adminLogin, query, pool, outbox };

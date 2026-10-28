@@ -19,7 +19,7 @@ test('register → verify email → logged in with own profile active', async ()
 });
 
 test('cannot log in before verifying email; wrong password and unknown email look identical', async () => {
-  await api().post('/api/v1/auth/register').send({ email: 'a@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'aaa_b', avatarId: 1, dob: h.dobYearsAgo(25) } });
+  await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'a@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'aaa_b', avatarId: 1, dob: h.dobYearsAgo(25) } });
   const unverified = await api().post('/api/v1/auth/login').send({ email: 'a@example.org', password: 'Secret123' });
   assert.equal(unverified.status, 403); assert.equal(unverified.body.error.code, 'EMAIL_NOT_VERIFIED');
   const wrong = await api().post('/api/v1/auth/login').send({ email: 'a@example.org', password: 'Nope12345' });
@@ -29,7 +29,7 @@ test('cannot log in before verifying email; wrong password and unknown email loo
 });
 
 test('wrong verification code is rejected and locks after 5 tries', async () => {
-  await api().post('/api/v1/auth/register').send({ email: 'c@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'cccc', avatarId: 1, dob: h.dobYearsAgo(25) } });
+  await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'c@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'cccc', avatarId: 1, dob: h.dobYearsAgo(25) } });
   const real = h.lastCode('c@example.org');
   const wrong = real === '000000' ? '111111' : '000000';
   for (let i = 0; i < 5; i++) assert.equal((await api().post('/api/v1/auth/verify-email').send({ email: 'c@example.org', code: wrong })).status, 400);
@@ -39,15 +39,15 @@ test('wrong verification code is rejected and locks after 5 tries', async () => 
 
 test('registration rules: duplicate email, privacy policy, weak password, under-13 independent user', async () => {
   await h.adultLogin();
-  const dup = await api().post('/api/v1/auth/register').send({ email: 'RAVI@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'other_one', avatarId: 1, dob: h.dobYearsAgo(30) } });
+  const dup = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'RAVI@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'other_one', avatarId: 1, dob: h.dobYearsAgo(30) } });
   assert.equal(dup.status, 409); assert.equal(dup.body.error.code, 'EMAIL_TAKEN');
-  const noPolicy = await api().post('/api/v1/auth/register').send({ email: 'n@example.org', password: 'Secret123', accountType: 'adult', profile: { username: 'nnnn', avatarId: 1, dob: h.dobYearsAgo(30) } });
+  const noPolicy = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'n@example.org', password: 'Secret123', accountType: 'adult', profile: { username: 'nnnn', avatarId: 1, dob: h.dobYearsAgo(30) } });
   assert.equal(noPolicy.status, 400);
-  const weak = await api().post('/api/v1/auth/register').send({ email: 'w@example.org', password: 'short', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'wwww', avatarId: 1, dob: h.dobYearsAgo(30) } });
+  const weak = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'w@example.org', password: 'short', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'wwww', avatarId: 1, dob: h.dobYearsAgo(30) } });
   assert.equal(weak.status, 400); assert.equal(weak.body.error.code, 'VALIDATION_ERROR');
-  const kid = await api().post('/api/v1/auth/register').send({ email: 'k@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'kiddo', avatarId: 1, dob: h.dobYearsAgo(9) } });
+  const kid = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'k@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'kiddo', avatarId: 1, dob: h.dobYearsAgo(9) } });
   assert.equal(kid.status, 400); assert.equal(kid.body.error.code, 'PARENT_ACCOUNT_REQUIRED');
-  const future = await api().post('/api/v1/auth/register').send({ email: 'f@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'futur', avatarId: 1, dob: '2999-01-01' } });
+  const future = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'f@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'futur', avatarId: 1, dob: '2999-01-01' } });
   assert.equal(future.status, 400);
 });
 
