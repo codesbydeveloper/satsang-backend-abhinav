@@ -46,8 +46,11 @@ module.exports = {
       Profile: obj({
         id: int(), username: str(), avatarId: int({ minimum: 1, maximum: 16 }), ageGroup: str({ example: 'Bals/Balikas B' }),
         isChild: bool(), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }),
-        dob: str({ format: 'date', description: 'Only returned to the profile’s own account.' }), createdAt: str(),
+        dob: str({ format: 'date', description: 'Only returned to the profile’s own account.' }),
+        country: { ...ref('CountryCode'), nullable: true, description: 'Private: only returned to the profile’s own account (never on leaderboards or public views). Null for profiles created before Profile setup asked for it.' },
+        createdAt: str(),
       }),
+      CountryCode: str({ pattern: '^[A-Z]{2}$', example: 'IN', description: 'Country / region: an assigned ISO 3166-1 alpha-2 code (lower case is accepted and stored upper case). Anything else: 400 `VALIDATION_ERROR` on `country`.' }),
       Account: obj({ id: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }), emailVerified: bool(), parentPinSet: bool() }),
       AccountOwnerView: {
         description: 'GET /me only: the Account plus the owner’s private Sign Up details and the reserved sign-up bonus. Never in login/refresh responses, other users’ views or admin lists.',
@@ -134,7 +137,7 @@ module.exports = {
         + 'active on this device session and returns an access token for it. Errors: 403 `INDEPENDENT_ONLY` (parent accounts '
         + 'use POST /profiles), 409 `PROFILE_EXISTS`, 400 `USERNAME_*`, `DOB_MISSING`, `PARENT_ACCOUNT_REQUIRED`.',
       security: user,
-      requestBody: body(obj({ username: str({ description: '3–20 letters (any script), digits, _ or .' }), avatarId: int({ description: '1–16' }), mode: str({ enum: ['sanatan', 'satsang'] }) }, ['username', 'avatarId'])),
+      requestBody: body(obj({ username: str({ description: '3–20 letters (any script), digits, _ or .' }), avatarId: int({ description: '1–16' }), mode: str({ enum: ['sanatan', 'satsang'] }), country: ref('CountryCode') }, ['username', 'avatarId'])),
       responses: { 201: ok('Profile created and active', obj({ accessToken: str(), activeProfileId: int(), profile: ref('Profile') })), ...errors(400, 401, 403, 409) } }) },
     '/me/active-profile': { post: op('Account', 'Who is playing on this device: a profile, or null for the parent area', {
       description: 'Parent accounts: leaving a child’s profile (to a sibling or to the parent area, profileId null) needs the Parent PIN '
@@ -156,23 +159,23 @@ module.exports = {
         + 'of this device stays valid). Errors: 401 `INVALID_CREDENTIALS` (current password wrong), 400 `VALIDATION_ERROR`, 403 `PARENT_MODE_REQUIRED` (a parent account while a child plays).',
       security: user, requestBody: body(obj({ currentPassword: str(), newPassword: str() }, ['currentPassword', 'newPassword'])),
       responses: { 200: ok('Changed', obj({ accessToken: str(), activeProfileId: int({ nullable: true }), otherSessionsEnded: int() })), ...errors(400, 401, 403, 429) } }) },
-    '/me/settings': { patch: op('Account', 'Language and/or path (mode) for whoever is playing', {
-      description: 'Independent: language → the account and its profile, mode → its profile. Parent area: language → the account (mode: 400 `NO_ACTIVE_PROFILE`). '
-        + 'A parent’s child: 403 `PARENT_MODE_REQUIRED` (the parent sets a child’s path and language with PATCH /profiles/{id} from the parent area).',
-      security: user, requestBody: body(obj({ language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }) }), false),
+    '/me/settings': { patch: op('Account', 'Language, path (mode) and/or country for whoever is playing', {
+      description: 'Independent: language → the account and its profile, mode and country → its profile. Parent area: language → the account (mode or country: 400 `NO_ACTIVE_PROFILE`). '
+        + 'A parent’s child: 403 `PARENT_MODE_REQUIRED` (the parent sets a child’s path, language and country with PATCH /profiles/{id} from the parent area).',
+      security: user, requestBody: body(obj({ language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), country: ref('CountryCode') }), false),
       responses: { 200: ok('Updated', obj({ account: ref('Account'), profile: { ...ref('Profile'), nullable: true } })), ...errors(400, 401, 403) } }) },
 
     '/profiles': {
       get: op('Profiles', 'List the account’s profiles', { security: user, responses: { 200: ok('Profiles'), ...errors(401) } }),
       post: op('Profiles', 'Add a child profile (parent accounts, parent area; recorded parental consent)', {
         description: 'From the parent area no PIN is needed (a PIN sent anyway is checked). The first child can be added before the Parent PIN exists; later children need it (409 `PIN_NOT_SET`). From a child’s session: 403 `PARENT_MODE_REQUIRED`. The response carries the server’s age group.',
-        security: user, requestBody: body(obj({ pin: str(), username: str(), avatarId: int(), dob: str({ format: 'date' }), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'] }), parentalConsent: { type: 'boolean', enum: [true] } }, ['username', 'avatarId', 'dob', 'parentalConsent'])),
+        security: user, requestBody: body(obj({ pin: str(), username: str(), avatarId: int(), dob: str({ format: 'date' }), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'] }), country: ref('CountryCode'), parentalConsent: { type: 'boolean', enum: [true] } }, ['username', 'avatarId', 'dob', 'parentalConsent'])),
         responses: { 201: ok('Created', obj({ profile: ref('Profile') })), ...errors(400, 401, 403, 409, 429) } }),
     },
     '/profiles/{id}': {
-      patch: op('Profiles', 'Change username, avatar, language or mode', {
-        description: 'Parent area: any own child, no PIN. A parent session playing as one child editing a sibling: PIN required. The active profile itself: an adult changes avatar / language / mode; a parent’s child only its avatar (language or mode without the PIN: 403 `PIN_REQUIRED`; username: 403 `USERNAME_PARENT_ONLY`). Username errors: 400 `USERNAME_*`.',
-        security: user, parameters: [idParam], requestBody: body(obj({ username: str(), avatarId: int(), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), pin: str() }), false),
+      patch: op('Profiles', 'Change username, avatar, language, mode or country', {
+        description: 'Parent area: any own child, no PIN. A parent session playing as one child editing a sibling: PIN required. The active profile itself: an adult changes avatar / language / mode / country; a parent’s child only its avatar (language, mode or country without the PIN: 403 `PIN_REQUIRED`; username: 403 `USERNAME_PARENT_ONLY`). Username errors: 400 `USERNAME_*`.',
+        security: user, parameters: [idParam], requestBody: body(obj({ username: str(), avatarId: int(), language: str({ enum: ['en', 'gu'] }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), country: ref('CountryCode'), pin: str() }), false),
         responses: { 200: ok('Updated', obj({ profile: ref('Profile') })), ...errors(400, 401, 403, 404, 429) } }),
       delete: op('Profiles', 'Delete one child profile and all its data with the Parent PIN; the parent account and other children are unaffected', {
         description: 'Parent area only (403 `PARENT_MODE_REQUIRED` while a child plays; 403 `NOT_A_CHILD_PROFILE`). Irreversible. Devices playing as that child are logged out. '

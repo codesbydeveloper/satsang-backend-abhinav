@@ -39,7 +39,7 @@ On Windows use `set NODE_ENV=test&& npm run migrate` (cmd) or `$env:NODE_ENV="te
 
 ## Project layout
 ```
-db/migrations/      SQL schema (001 accounts/profiles/admin, 002 activity, 003 deletion requests, 004 account dob, 005 heartbeat minutes, 006 sign-up name/gender + sign-up bonus). `npm run migrate` applies them in order.
+db/migrations/      SQL schema (001 accounts/profiles/admin, 002 activity, 003 deletion requests, 004 account dob, 005 heartbeat minutes, 006 sign-up name/gender + sign-up bonus, 007 profile country). `npm run migrate` applies them in order.
 scripts/            migrate.js, seed-admin.js
 src/config.js       all settings from .env
 src/routes/         auth, account (/me), profiles, parent (PIN + report), public, admin/*

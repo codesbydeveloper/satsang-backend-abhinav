@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const { isValidDob } = require('./ageGroup');
+const { isCountryCode } = require('./countries');
 
 const email = z.string().trim().toLowerCase().pipe(z.email().max(254));
 const password = z.string().min(8, 'Use at least 8 characters').max(72, 'Use at most 72 characters')
@@ -27,5 +28,7 @@ const nameProblem = (s) => {
 const personName = z.string().transform((s) => s.normalize('NFC').replace(/[\u2018\u2019\u02BC]/g, "'").trim())
   .superRefine((s, ctx) => { const message = nameProblem(s); if (message) ctx.addIssue({ code: 'custom', message }); });
 const gender = z.enum(['male', 'female', 'prefer_not_to_say']);
+// Country / region of a profile: ISO 3166-1 alpha-2 ("IN", "US", "GB"; "in" is accepted and stored upper case). Private.
+const country = z.string().trim().toUpperCase().refine(isCountryCode, 'Choose a country or region from the list');
 
-module.exports = { email, password, username, dob, avatarId, language, mode, pin, code, phone, personName, gender, NAME_RE };
+module.exports = { email, password, username, dob, avatarId, language, mode, pin, code, phone, personName, gender, country, NAME_RE };

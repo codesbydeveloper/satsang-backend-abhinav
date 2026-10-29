@@ -1,13 +1,16 @@
 const { query } = require('../db');
 const { ageGroupForDob } = require('./ageGroup');
 
-/** Public-safe view. dob is included only when `own` is true (never shown to other users). */
+/** Public-safe view. dob and country are included only when `own` is true (never shown to other users). */
 function profileView(p, { own = false } = {}) {
   const v = {
     id: p.id, username: p.username, avatarId: p.avatar_id, ageGroup: p.age_group,
     isChild: !!p.is_child, language: p.language, mode: p.mode, createdAt: p.created_at,
   };
-  if (own) v.dob = p.dob;
+  if (own) {
+    v.dob = p.dob;
+    v.country = p.country ?? null;
+  }
   return v;
 }
 

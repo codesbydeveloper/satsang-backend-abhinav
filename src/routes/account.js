@@ -135,7 +135,7 @@ router.patch('/', validate(z.object({ phone: S.phone.nullable().optional(), lang
  * Uses the date of birth given at registration (then removes it from the account: it lives on the profile only),
  * and makes the new profile active on this device session.
  */
-router.post('/profile', validate(z.object({ username: S.username, avatarId: S.avatarId, mode: S.mode.optional() })), async (req, res) => {
+router.post('/profile', validate(z.object({ username: S.username, avatarId: S.avatarId, mode: S.mode.optional(), country: S.country.optional() })), async (req, res) => {
   const a = req.account;
   if (a.account_type !== 'adult') throw forbidden('INDEPENDENT_ONLY', 'Parent accounts add child profiles with POST /profiles');
   if ((await query('SELECT 1 FROM profiles WHERE account_id = ? LIMIT 1', [a.id])).length) throw conflict('PROFILE_EXISTS', 'This account already has a profile');
@@ -145,12 +145,12 @@ router.post('/profile', validate(z.object({ username: S.username, avatarId: S.av
   const u = await checkUsername(req.body.username);
   if (!u.ok) throw badRequest('USERNAME_' + u.reason, 'That username cannot be used');
 
-  const { username, avatarId, mode } = req.body;
+  const { username, avatarId, mode, country } = req.body;
   const profileId = await tx(async (c) => {
     const r = await c.query(
-      `INSERT INTO profiles (account_id, username, username_lower, avatar_id, dob, age_group, is_child, language, mode)
-       VALUES (?,?,?,?,?,?,0,?,?)`,
-      [a.id, username.normalize('NFC'), lowerKey(username), avatarId, a.dob, ageGroupForDob(a.dob), a.preferred_language, mode || null]);
+      `INSERT INTO profiles (account_id, username, username_lower, avatar_id, dob, age_group, is_child, language, mode, country)
+       VALUES (?,?,?,?,?,?,0,?,?,?)`,
+      [a.id, username.normalize('NFC'), lowerKey(username), avatarId, a.dob, ageGroupForDob(a.dob), a.preferred_language, mode || null, country || null]);
     await c.query('UPDATE accounts SET dob = NULL WHERE id = ?', [a.id]);
     // this device session now plays as the new profile (refresh keeps it)
     await c.query('UPDATE refresh_tokens SET profile_id = ? WHERE session_id = ? AND account_id = ? AND revoked_at IS NULL', [r.insertId, req.sessionId, a.id]);
@@ -171,19 +171,21 @@ function requireParentAreaIfParent(req) {
 
 /**
  * Settings for whoever is playing (contract 3.1: language and mode can change at any time).
- * - Independent: language → the account and its profile; mode → its profile.
- * - Parent area (no active profile): language → the account; there is no path to set (400 NO_ACTIVE_PROFILE).
- * - A parent's child: refused (403 PARENT_MODE_REQUIRED); the parent sets a child's path and language in Edit child.
+ * - Independent: language → the account and its profile; mode and country → its profile.
+ * - Parent area (no active profile): language → the account; there is no path or country to set (400 NO_ACTIVE_PROFILE).
+ * - A parent's child: refused (403 PARENT_MODE_REQUIRED); the parent sets a child's path, language and country in
+ *   Edit child (PATCH /profiles/:id).
  */
-router.patch('/settings', validate(z.object({ language: S.language.optional(), mode: S.mode.nullable().optional() })
-  .refine((b) => b.language !== undefined || b.mode !== undefined, 'Send language and/or mode')), async (req, res) => {
+router.patch('/settings', validate(z.object({ language: S.language.optional(), mode: S.mode.nullable().optional(), country: S.country.optional() })
+  .refine((b) => b.language !== undefined || b.mode !== undefined || b.country !== undefined, 'Send language, mode and/or country')), async (req, res) => {
   requireParentAreaIfParent(req);
-  const { language, mode } = req.body;
-  if (mode !== undefined && !req.profileId) throw badRequest('NO_ACTIVE_PROFILE', 'No profile is active on this device');
+  const { language, mode, country } = req.body;
+  if ((mode !== undefined || country !== undefined) && !req.profileId) throw badRequest('NO_ACTIVE_PROFILE', 'No profile is active on this device');
   await tx(async (c) => {
     if (language) await c.query('UPDATE accounts SET preferred_language = ? WHERE id = ?', [language, req.account.id]);
     if (req.profileId && language) await c.query('UPDATE profiles SET language = ? WHERE id = ? AND account_id = ?', [language, req.profileId, req.account.id]);
     if (req.profileId && mode !== undefined) await c.query('UPDATE profiles SET mode = ? WHERE id = ? AND account_id = ?', [mode, req.profileId, req.account.id]);
+    if (req.profileId && country !== undefined) await c.query('UPDATE profiles SET country = ? WHERE id = ? AND account_id = ?', [country, req.profileId, req.account.id]);
   });
   const a = (await query('SELECT * FROM accounts WHERE id = ?', [req.account.id]))[0];
   const p = req.profileId ? (await query('SELECT * FROM profiles WHERE id = ?', [req.profileId]))[0] : null;
