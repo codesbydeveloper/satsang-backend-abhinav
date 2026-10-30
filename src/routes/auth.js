@@ -13,6 +13,7 @@ const { sendVerificationCode, sendPasswordResetCode } = require('../utils/mailer
 const { revokeAllRefreshTokens, sha256 } = require('../utils/tokens');
 const { ageOn, ageGroupForDob, isValidDob } = require('../utils/ageGroup');
 const { reserveSignupBonus } = require('../utils/signupBonus');
+const { ensureReferralCode } = require('../utils/referrals');
 const { checkUsername, lowerKey } = require('../utils/usernameFilter');
 const { startSession, createRefresh, buildAuthResponse } = require('../utils/session');
 const { loadProfiles } = require('../utils/profiles');
@@ -103,6 +104,7 @@ router.post('/verify-email', authLimiter, validate(z.object({ email: S.email, co
   await consumeCode(account.id, 'verify_email', req.body.code);
   await query('UPDATE accounts SET email_verified_at = COALESCE(email_verified_at, UTC_TIMESTAMP()) WHERE id = ?', [account.id]);
   await reserveSignupBonus(account.id);   // "Receive 100 Sparks": reserved once, credited in Milestone 2
+  await ensureReferralCode(account.id);    // every account has its own referral code
   account.email_verified_at = account.email_verified_at || toSql();
   res.json(await startSession(account));
 });

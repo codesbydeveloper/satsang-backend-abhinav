@@ -17,6 +17,7 @@ const { verifyPin } = require('../utils/pin');
 const { TZ, etDate, toSql } = require('../utils/time');
 const { signupBonusOf } = require('../utils/signupBonus');
 const exploreImport = require('../utils/exploreImport');
+const referrals = require('../utils/referrals');
 
 /** Private Sign Up details of the account owner (null for accounts created before they were asked). */
 const ownerDetails = (a) => ({ firstName: a.first_name || null, lastName: a.last_name || null, gender: a.gender || null });
@@ -173,6 +174,22 @@ router.post('/profile', validate(z.object({ username: S.username, avatarId: S.av
  */
 router.post('/explore-import', validate(exploreImport.schema), async (req, res) => {
   res.json(await tx((c) => exploreImport.importExplore(c, req)));
+});
+
+/**
+ * Referrals (contract 8.3, client rules 30 Oct 2026; rules in utils/referrals.js). The code belongs to the account.
+ * GET: my code, how many friends used it (no names) and the code this account used. Codes are never logged.
+ */
+router.get('/referral', async (req, res) => {
+  res.json(await referrals.referralView(req.account));
+});
+
+// Apply a friend's code (once per account, within the window). A parent applies it from the parent area.
+// deviceId: the app's random install id (optional), only used to refuse a second referral from the same phone.
+router.post('/referral/apply', authLimiter, validate(z.object({ code: z.string().trim().min(1).max(20), deviceId: z.string().trim().min(8).max(100).optional() })), async (req, res) => {
+  requireParentAreaIfParent(req);
+  const applied = await tx((c) => referrals.applyReferral(c, req.account, req.body.code, req.body.deviceId));
+  res.json({ applied, referral: await referrals.referralView(req.account) });
 });
 
 /** A parent account playing as a child: account settings, password and deletion belong to the parent area. */

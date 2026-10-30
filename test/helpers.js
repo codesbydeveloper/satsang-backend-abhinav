@@ -13,8 +13,9 @@ async function resetDb() {
   // tests TRUNCATE tables — never allow them to run against a real database
   if (!/_test$/.test(require('../src/config').db.database)) throw new Error('Refusing to run tests: DB_NAME in .env.test must end with _test');
   await query('SET FOREIGN_KEY_CHECKS = 0');
-  for (const t of ['explore_import_items', 'explore_imports', 'account_deletion_requests', 'audit_log', 'profile_activity_minutes', 'profile_daily_activity', 'refresh_tokens', 'email_codes', 'signup_bonuses', 'profiles', 'accounts', 'admins']) await query(`TRUNCATE TABLE ${t}`);
+  for (const t of ['referrals', 'explore_import_items', 'explore_imports', 'account_deletion_requests', 'audit_log', 'profile_activity_minutes', 'profile_daily_activity', 'refresh_tokens', 'email_codes', 'signup_bonuses', 'profiles', 'accounts', 'admins']) await query(`TRUNCATE TABLE ${t}`);
   await query('SET FOREIGN_KEY_CHECKS = 1');
+  await query("UPDATE app_settings SET value = CASE setting_key WHEN 'referral_new_user_sparks' THEN '25' WHEN 'referral_referrer_sparks' THEN '50' WHEN 'referral_window_hours' THEN '48' ELSE NULL END, updated_by = NULL");
   outbox.length = 0;
 }
 

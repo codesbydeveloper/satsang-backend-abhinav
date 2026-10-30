@@ -34,7 +34,7 @@ module.exports = {
   servers: [{ url: '/api/v1' }],
   tags: [
     { name: 'Meta' }, { name: 'Auth' }, { name: 'Account' }, { name: 'Profiles' }, { name: 'Parent PIN' },
-    { name: 'Admin Auth' }, { name: 'Admin Management' }, { name: 'Admin Users' }, { name: 'Admin Moderation' }, { name: 'Admin Audit' }, { name: 'Admin Dashboard' }, { name: 'Admin Deletion Requests' },
+    { name: 'Admin Auth' }, { name: 'Admin Management' }, { name: 'Admin Users' }, { name: 'Admin Moderation' }, { name: 'Admin Audit' }, { name: 'Admin Dashboard' }, { name: 'Admin Deletion Requests' }, { name: 'Referrals' }, { name: 'Admin Referrals' },
   ],
   components: {
     securitySchemes: {
@@ -49,6 +49,16 @@ module.exports = {
         dob: str({ format: 'date', description: 'Only returned to the profile’s own account.' }),
         country: { ...ref('CountryCode'), nullable: true, description: 'Private: only returned to the profile’s own account (never on leaderboards or public views). Null for profiles created before Profile setup asked for it.' },
         createdAt: str(),
+      }),
+      ReferralView: obj({
+        code: str({ example: 'K7P2QX' }), newUserSparks: int(), referrerSparks: int(), windowHours: int(),
+        counts: obj({ total: int(), waitingForFirstQuiz: int(), qualified: int(), sparksPending: int() }),
+        applied: { ...obj({ code: str(), sparks: int(), status: str({ enum: ['reserved', 'credited'] }) }), nullable: true },
+        canApply: bool(), applyUntil: str({ format: 'date-time' }),
+      }),
+      ReferralSettings: obj({
+        newUserSparks: int({ minimum: 0, example: 25 }), referrerSparks: int({ minimum: 0, example: 50 }),
+        windowHours: int({ minimum: 1, example: 48 }), maxPerReferrer: int({ minimum: 1, nullable: true, description: 'null = unlimited' }),
       }),
       CountryCode: str({ pattern: '^[A-Z]{2}$', example: 'IN', description: 'Country / region: an assigned ISO 3166-1 alpha-2 code (lower case is accepted and stored upper case). Anything else: 400 `VALIDATION_ERROR` on `country`.' }),
       Account: obj({ id: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), phone: str({ nullable: true }), language: str({ enum: ['en', 'gu'] }), emailVerified: bool(), parentPinSet: bool() }),
@@ -178,6 +188,17 @@ module.exports = {
         })),
         ...errors(400, 401, 403, 404, 409),
       },
+    }) },
+    '/me/referral': { get: op('Referrals', 'My referral code (account level), how many friends used it (no names), and the code this account used', {
+      description: 'The code is 6 characters without 0 / O / 1 / I. counts.waitingForFirstQuiz: friends who still have to finish their first full quiz before the referrer\u2019s Sparks are earned. canApply: this account may still enter a friend\u2019s code (none used yet, within windowHours of creating the account). Sparks are reserved here and credited by the Sparks ledger in Milestone 2.',
+      security: user,
+      responses: { 200: ok('Referral', ref('ReferralView')), ...errors(401) },
+    }) },
+    '/me/referral/apply': { post: op('Referrals', 'Apply a friend\u2019s referral code: +25 Sparks reserved for the new user at once; the friend gets +50 after the new user\u2019s first full quiz', {
+      description: 'Once per account, within the window (default 48 h after creating the account). A parent account applies it from the parent area. Errors: 400 `INVALID_CODE`, 400 `SELF_REFERRAL` (own code or the same mailbox), 409 `ALREADY_APPLIED` (this account, or a code already used on this device), 403 `WINDOW_EXPIRED`, 409 `REFERRER_LIMIT`, 403 `PARENT_MODE_REQUIRED`. Amounts and limits: Admin Panel (app_settings).',
+      security: user,
+      requestBody: body(obj({ code: str({ example: 'K7P2QX' }), deviceId: str({ description: 'Optional random install id of the app (not a hardware id); stored only as an HMAC, to refuse a second referral from the same phone.' }) }, ['code'])),
+      responses: { 200: ok('Applied', obj({ applied: obj({ id: int(), sparks: int(), status: str({ enum: ['reserved'] }) }), referral: ref('ReferralView') })), ...errors(400, 401, 403, 409, 429) },
     }) },
     '/me/password': { post: op('Account', 'Change the password; every other device is logged out, this one stays logged in', {
       description: 'newPassword: 8–72 characters with a letter and a number. Every earlier access token stops working; use the returned one (the refresh token '
@@ -318,6 +339,28 @@ module.exports = {
       security: admin, parameters: [idParam], requestBody: body(obj({ reason: str({ description: '3–200 chars' }) }, ['reason'])),
       responses: { 200: ok('Rejected', obj({ id: int(), status: str({ enum: ['rejected'] }), accountId: int() })), ...errors(400, 401, 403, 404, 409) } }) },
 
+    '/admin/referrals': { get: op('Admin Referrals', 'Referrals list (Full Admin): code, referrer and new user (usernames only, never emails), status and dates, newest first', {
+      security: admin,
+      parameters: [
+        { name: 'q', in: 'query', schema: str(), description: 'Code or username' },
+        { name: 'status', in: 'query', schema: str({ enum: ['all', 'waiting_for_first_quiz', 'qualified', 'credited', 'rejected'] }) },
+        { name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int({ maximum: 100 }) },
+      ],
+      responses: { 200: ok('Referrals', obj({ page: int(), pageSize: int(), total: int(), rows: { type: 'array', items: obj({
+        id: int(), code: str(), status: str(),
+        referrer: { ...obj({ accountId: int(), accountType: str(), username: str({ nullable: true }) }), nullable: true, description: 'Null once the referrer account was deleted.' },
+        referee: obj({ accountId: int(), accountType: str(), username: str({ nullable: true }) }),
+        newUserSparks: int(), newUserStatus: str({ enum: ['reserved', 'credited'] }), referrerSparks: int(),
+        createdAt: str(), qualifiedAt: str({ nullable: true }), creditedAt: str({ nullable: true }),
+      }) } })), ...errors(401, 403) },
+    }) },
+    '/admin/referrals/settings': {
+      get: op('Admin Referrals', 'Referral settings (Full Admin)', { security: admin, responses: { 200: ok('Settings', obj({ settings: ref('ReferralSettings') })), ...errors(401, 403) } }),
+      put: op('Admin Referrals', 'Change referral settings (Full Admin, audited as referral_settings.updated). Applies to codes entered from now on.', {
+        security: admin, requestBody: body(ref('ReferralSettings')),
+        responses: { 200: ok('Saved', obj({ settings: ref('ReferralSettings') })), ...errors(400, 401, 403) },
+      }),
+    },
     '/admin/audit-log': { get: op('Admin Audit', 'Who changed what and when (Full Admin, read-only)', {
       security: admin, parameters: ['adminId', 'action', 'entityType', 'from', 'to', 'page', 'pageSize'].map((n) => ({ name: n, in: 'query', schema: str() })), responses: { 200: ok('Audit entries'), ...errors(401, 403) } }) },
   },

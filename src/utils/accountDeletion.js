@@ -5,8 +5,9 @@
  * Deleting the account row cascades (ON DELETE CASCADE) to its profiles and everything they own — today daily time;
  * from M2 Sparks, Dress Up items, saved Shangars, scores and leaderboard rows, which must use the same cascade on
  * profile_id — and to the account's refresh tokens and email codes, so every device is logged out (the auth middleware
- * also refuses any access token whose account is gone). Anything that points at an account WITHOUT a cascade (e.g. the
- * M2 referral link "referred_by") must be cleared here, inside the same transaction.
+ * also refuses any access token whose account is gone). Anything that points at an account WITHOUT a cascade must be
+ * cleared here, inside the same transaction. Referrals: the new user's row cascades; a deleted referrer becomes NULL
+ * (ON DELETE SET NULL), so the new user keeps their reward.
  *
  * Nothing personal is kept or logged: the deletion_requests row keeps only ids, the account type, the source and
  * the number of profiles deleted.
