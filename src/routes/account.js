@@ -16,6 +16,7 @@ const { checkUsername, lowerKey } = require('../utils/usernameFilter');
 const { verifyPin } = require('../utils/pin');
 const { TZ, etDate, toSql } = require('../utils/time');
 const { signupBonusOf } = require('../utils/signupBonus');
+const exploreImport = require('../utils/exploreImport');
 
 /** Private Sign Up details of the account owner (null for accounts created before they were asked). */
 const ownerDetails = (a) => ({ firstName: a.first_name || null, lastName: a.last_name || null, gender: a.gender || null });
@@ -162,6 +163,16 @@ router.post('/profile', validate(z.object({ username: S.username, avatarId: S.av
     activeProfileId: profileId,
     profile: profileView(p, { own: true }),
   });
+});
+
+/**
+ * Explore → account (client, 30 Oct 2026): what someone earned and did in Explore mode goes into their new profile
+ * (an independent account's own profile, or a parent's child named by profileId, from the parent area). Once per
+ * account, idempotent by transaction id; entries wait as 'pending_import' until Milestone 2/3 verifies and credits
+ * them. Rules: utils/exploreImport.js.
+ */
+router.post('/explore-import', validate(exploreImport.schema), async (req, res) => {
+  res.json(await tx((c) => exploreImport.importExplore(c, req)));
 });
 
 /** A parent account playing as a child: account settings, password and deletion belong to the parent area. */

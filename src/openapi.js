@@ -154,6 +154,31 @@ module.exports = {
     '/me/children/{id}/activity': { get: op('Account', 'A child’s daily time for the parent area (parent accounts, parent area only)', {
       security: user, parameters: [idParam, { name: 'days', in: 'query', schema: int({ minimum: 1, maximum: 90, default: 7 }) }],
       responses: { 200: ok('Days, oldest first; missing days are 0', obj({ profileId: int(), timeZone: str(), today: str({ format: 'date' }), todaySeconds: int(), todayMinutes: int(), days: { type: 'array', items: obj({ day: str({ format: 'date' }), seconds: int(), minutes: int() }) } })), ...errors(400, 401, 403, 404) } }) },
+    '/me/explore-import': { post: op('Account', 'Explore → account: add what was earned and done in Explore mode to the new profile (once per account, idempotent by transaction id)', {
+      description: [
+        'Independent account: goes into its own profile (`profileId` optional). Parent account: `profileId` of one of its children is required, from the parent area.',
+        'The first call fixes the target profile and applies `avatarId` / `mode` to it; later calls (batches, retries) must name the same profile, otherwise 409 `EXPLORE_ALREADY_IMPORTED`.',
+        'Each entry has a unique UUID `txId`: one already stored is counted in `duplicates`, never twice. At most 200 entries per call.',
+        'Nothing is credited here: entries are stored as `pending_import` and verified/credited by the server in Milestone 2 (Sparks, purchases) and 3 (scores, progress). The nickname is not sent (it is pre-filled as the username and live-checked in Profile setup / Add child).',
+      ].join('\n\n'),
+      security: user,
+      requestBody: body(obj({
+        profileId: int({ description: 'Parent accounts: the child receiving the import.' }),
+        avatarId: int({ minimum: 1, maximum: 16 }),
+        mode: str({ enum: ['sanatan', 'satsang'] }),
+        sparks: { type: 'array', maxItems: 200, items: obj({ txId: str({ format: 'uuid' }), amount: int({ minimum: 1 }), reason: str({ example: 'quiz_correct' }), at: str({ format: 'date-time' }) }, ['txId', 'amount', 'reason', 'at']) },
+        purchases: { type: 'array', maxItems: 200, items: obj({ txId: str({ format: 'uuid' }), itemId: str(), sparks: int({ minimum: 0 }), at: str({ format: 'date-time' }) }, ['txId', 'itemId', 'sparks', 'at']) },
+        scores: { type: 'array', maxItems: 200, items: obj({ txId: str({ format: 'uuid' }), game: str({ example: 'quiz' }), itemId: str({ nullable: true }), score: int({ minimum: 0 }), at: str({ format: 'date-time' }) }, ['txId', 'game', 'score', 'at']) },
+        progress: { type: 'array', maxItems: 200, items: obj({ txId: str({ format: 'uuid' }), area: str({ example: 'learn' }), itemId: str(), value: int({ minimum: 0 }), at: str({ format: 'date-time' }) }, ['txId', 'area', 'itemId', 'value', 'at']) },
+      })),
+      responses: {
+        200: ok('Stored (or already stored)', obj({
+          profileId: int(), firstImport: bool(), imported: int(), duplicates: int(),
+          pending: obj({ sparks: int({ description: 'Sum of pending Explore Sparks' }), purchases: int(), scores: int(), progress: int() }),
+        })),
+        ...errors(400, 401, 403, 404, 409),
+      },
+    }) },
     '/me/password': { post: op('Account', 'Change the password; every other device is logged out, this one stays logged in', {
       description: 'newPassword: 8–72 characters with a letter and a number. Every earlier access token stops working; use the returned one (the refresh token '
         + 'of this device stays valid). Errors: 401 `INVALID_CREDENTIALS` (current password wrong), 400 `VALIDATION_ERROR`, 403 `PARENT_MODE_REQUIRED` (a parent account while a child plays).',
