@@ -30,7 +30,7 @@ The first Full Admin sets up an authenticator app (Google Authenticator, Authy, 
 ```bash
 cp .env.test.example .env.test   # a SEPARATE database whose name ends in _test (tests wipe its tables)
 NODE_ENV=test npm run migrate
-npm test                         # 34 tests: auth, profiles, Parent PIN, deletion, admin roles/2FA/audit
+npm test                         # 64 tests: auth, profiles, Parent PIN, settings, deletion, admin roles/2FA/audit
 ```
 On Windows use `set NODE_ENV=test&& npm run migrate` (cmd) or `$env:NODE_ENV="test"; npm run migrate` (PowerShell).
 
@@ -39,7 +39,7 @@ On Windows use `set NODE_ENV=test&& npm run migrate` (cmd) or `$env:NODE_ENV="te
 
 ## Project layout
 ```
-db/migrations/      SQL schema (001 accounts/profiles/admin, 002 activity). `npm run migrate` applies them in order.
+db/migrations/      SQL schema (001 accounts/profiles/admin, 002 activity, 003 deletion requests, 004 account dob, 005 heartbeat minutes, 006 sign-up name/gender + sign-up bonus, 007 profile country). `npm run migrate` applies them in order.
 scripts/            migrate.js, seed-admin.js
 src/config.js       all settings from .env
 src/routes/         auth, account (/me), profiles, parent (PIN + report), public, admin/*
@@ -55,6 +55,7 @@ test/               automated tests
 - **Parent mode.** A parent logs in "in parent mode". Switching to a child (`POST /profiles/:id/switch`) and coming back (`POST /profiles/parent-mode`) both need the 4-digit Parent PIN. Five wrong PINs lock it for 15 minutes; resetting it with the account password clears the lock.
 - **Age groups** follow contract Section 3.3 and are recomputed from DOB (Eastern Time) on every profile load and every 6 hours. An admin override wins until it is cleared. DOB is returned only to the profile's own account.
 - **Usernames:** 3–20 characters, letters in any script (Gujarati works), digits, `_` and `.`; unique ignoring case; checked against the admin-managed blocked/reserved list with look-alike handling (`sh1t` ≈ `shit`).
+- **Account deletion:** in the app, `DELETE /me` (password) deletes at once, in one transaction, and records a completed row (source `app`) in the deletion history. The public web page (`POST /public/delete-account`) files a request (202) that a Full Admin approves (the account is deleted) or rejects with a reason in Admin → Deletion requests. Every path uses `deleteAccountCompletely` (`src/utils/accountDeletion.js`). History rows store no email or username, so nothing personal is kept after deletion. A parent deletes one child with the Parent PIN (`DELETE /profiles/:id`, parent area); devices playing as that child are logged out.
 - **Deletion:** database foreign keys cascade, so deleting a profile or account removes everything attached to it, now and for tables added in later milestones (new profile-owned tables must use `ON DELETE CASCADE` on `profile_id`).
 - **Admin login:** password → authenticator code → admin token (8 h). A step token can only be used for the 2FA calls. Five failures lock the admin for 15 minutes. Every admin action is written to `audit_log` (read-only through the API).
 

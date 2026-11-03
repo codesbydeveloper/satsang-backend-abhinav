@@ -19,7 +19,7 @@ test('register → verify email → logged in with own profile active', async ()
 });
 
 test('cannot log in before verifying email; wrong password and unknown email look identical', async () => {
-  await api().post('/api/v1/auth/register').send({ email: 'a@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'aaa_b', avatarId: 1, dob: h.dobYearsAgo(25) } });
+  await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'a@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'aaa_b', avatarId: 1, dob: h.dobYearsAgo(25) } });
   const unverified = await api().post('/api/v1/auth/login').send({ email: 'a@example.org', password: 'Secret123' });
   assert.equal(unverified.status, 403); assert.equal(unverified.body.error.code, 'EMAIL_NOT_VERIFIED');
   const wrong = await api().post('/api/v1/auth/login').send({ email: 'a@example.org', password: 'Nope12345' });
@@ -29,7 +29,7 @@ test('cannot log in before verifying email; wrong password and unknown email loo
 });
 
 test('wrong verification code is rejected and locks after 5 tries', async () => {
-  await api().post('/api/v1/auth/register').send({ email: 'c@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'cccc', avatarId: 1, dob: h.dobYearsAgo(25) } });
+  await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'c@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'cccc', avatarId: 1, dob: h.dobYearsAgo(25) } });
   const real = h.lastCode('c@example.org');
   const wrong = real === '000000' ? '111111' : '000000';
   for (let i = 0; i < 5; i++) assert.equal((await api().post('/api/v1/auth/verify-email').send({ email: 'c@example.org', code: wrong })).status, 400);
@@ -39,15 +39,15 @@ test('wrong verification code is rejected and locks after 5 tries', async () => 
 
 test('registration rules: duplicate email, privacy policy, weak password, under-13 independent user', async () => {
   await h.adultLogin();
-  const dup = await api().post('/api/v1/auth/register').send({ email: 'RAVI@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'other_one', avatarId: 1, dob: h.dobYearsAgo(30) } });
+  const dup = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'RAVI@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'other_one', avatarId: 1, dob: h.dobYearsAgo(30) } });
   assert.equal(dup.status, 409); assert.equal(dup.body.error.code, 'EMAIL_TAKEN');
-  const noPolicy = await api().post('/api/v1/auth/register').send({ email: 'n@example.org', password: 'Secret123', accountType: 'adult', profile: { username: 'nnnn', avatarId: 1, dob: h.dobYearsAgo(30) } });
+  const noPolicy = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'n@example.org', password: 'Secret123', accountType: 'adult', profile: { username: 'nnnn', avatarId: 1, dob: h.dobYearsAgo(30) } });
   assert.equal(noPolicy.status, 400);
-  const weak = await api().post('/api/v1/auth/register').send({ email: 'w@example.org', password: 'short', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'wwww', avatarId: 1, dob: h.dobYearsAgo(30) } });
+  const weak = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'w@example.org', password: 'short', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'wwww', avatarId: 1, dob: h.dobYearsAgo(30) } });
   assert.equal(weak.status, 400); assert.equal(weak.body.error.code, 'VALIDATION_ERROR');
-  const kid = await api().post('/api/v1/auth/register').send({ email: 'k@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'kiddo', avatarId: 1, dob: h.dobYearsAgo(9) } });
+  const kid = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'k@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'kiddo', avatarId: 1, dob: h.dobYearsAgo(9) } });
   assert.equal(kid.status, 400); assert.equal(kid.body.error.code, 'PARENT_ACCOUNT_REQUIRED');
-  const future = await api().post('/api/v1/auth/register').send({ email: 'f@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'futur', avatarId: 1, dob: '2999-01-01' } });
+  const future = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'f@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'futur', avatarId: 1, dob: '2999-01-01' } });
   assert.equal(future.status, 400);
 });
 
@@ -102,18 +102,40 @@ test('password reset: code flow, then every old session is invalid and new passw
 test('change password logs out other devices but keeps this one', async () => {
   const a = await h.adultLogin();
   const other = await api().post('/api/v1/auth/login').send({ email: 'ravi@example.org', password: 'Secret123' });
-  const c = await api().post('/api/v1/me/change-password').set(bearer(a.accessToken)).send({ currentPassword: 'Secret123', newPassword: 'Changed4567' });
+  const c = await api().post('/api/v1/me/password').set(bearer(a.accessToken)).send({ currentPassword: 'Secret123', newPassword: 'Changed4567' });
   assert.equal(c.status, 200);
+  assert.equal(c.body.otherSessionsEnded, 1);
+  assert.equal(c.body.activeProfileId, a.activeProfileId);
   assert.equal((await api().get('/api/v1/me').set(bearer(other.body.accessToken))).status, 401);
-  assert.equal((await api().get('/api/v1/me').set(bearer(c.body.accessToken))).status, 200);
-  assert.equal((await api().post('/api/v1/me/change-password').set(bearer(c.body.accessToken)).send({ currentPassword: 'wrong', newPassword: 'Changed9999' })).status, 401);
+  assert.equal((await api().post('/api/v1/auth/refresh').send({ refreshToken: other.body.refreshToken })).status, 401, 'the other device cannot refresh');
+  assert.equal((await api().get('/api/v1/me').set(bearer(a.accessToken))).status, 401, 'old access tokens stop working');
+  assert.equal((await api().get('/api/v1/me').set(bearer(c.body.accessToken))).status, 200, 'this device stays logged in');
+  assert.equal((await api().post('/api/v1/auth/refresh').send({ refreshToken: a.refreshToken })).status, 200, 'and keeps its refresh token');
+  assert.equal((await api().post('/api/v1/me/password').set(bearer(c.body.accessToken)).send({ currentPassword: 'wrong', newPassword: 'Changed9999' })).status, 401);
+  assert.equal((await api().post('/api/v1/me/password').set(bearer(c.body.accessToken)).send({ currentPassword: 'Changed4567', newPassword: 'short' })).body.error.code, 'VALIDATION_ERROR');
+  assert.equal((await api().post('/api/v1/auth/login').send({ email: 'ravi@example.org', password: 'Changed4567' })).status, 200);
 });
 
-test('adult deletes own account with password; everything is gone and the email can be reused', async () => {
+test('adult deletes own account in the app: gone at once, every device logged out, the email can be reused', async () => {
   const s = await h.adultLogin();
-  assert.equal((await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'bad', confirm: true })).status, 401);
-  assert.equal((await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'Secret123', confirm: true })).status, 200);
+  const other = await api().post('/api/v1/auth/login').send({ email: 'ravi@example.org', password: 'Secret123' });
+  assert.equal((await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'bad', confirm: true })).body.error.code, 'INVALID_CREDENTIALS');
+  assert.equal((await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'Secret123' })).status, 400, 'confirm required');
+  assert.equal((await h.query('SELECT COUNT(*) n FROM accounts'))[0].n, 1, 'nothing deleted by refused calls');
+  const r = await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'Secret123', confirm: true });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { deleted: true, profilesDeleted: 1 });
+  assert.equal((await h.query('SELECT COUNT(*) n FROM accounts'))[0].n, 0);
   assert.equal((await h.query('SELECT COUNT(*) n FROM profiles'))[0].n, 0);
+  assert.equal((await api().get('/api/v1/me').set(bearer(other.body.accessToken))).status, 401, 'the other device is logged out');
+  assert.equal((await api().post('/api/v1/auth/refresh').send({ refreshToken: other.body.refreshToken })).status, 401);
+  // already deleted: the token no longer works
+  assert.equal((await api().delete('/api/v1/me').set(bearer(s.accessToken)).send({ password: 'Secret123', confirm: true })).body.error.code, 'ACCOUNT_DELETED');
+  const history = await h.query('SELECT * FROM account_deletion_requests');
+  assert.equal(history.length, 1);
+  assert.deepEqual({ source: history[0].source, status: history[0].status, profiles: history[0].profiles_deleted, by: history[0].decided_by },
+    { source: 'app', status: 'completed', profiles: 1, by: null });
+  assert.ok(!JSON.stringify(history[0]).includes('ravi'), 'no email or username kept');
   assert.equal((await h.query('SELECT COUNT(*) n FROM refresh_tokens'))[0].n, 0);
   assert.equal((await api().get('/api/v1/me').set(bearer(s.accessToken))).status, 401);
   await h.adultLogin(); // same email + username register again
@@ -122,6 +144,8 @@ test('adult deletes own account with password; everything is gone and the email 
 test('public delete-account page endpoint works with email + password only', async () => {
   await h.adultLogin();
   assert.equal((await api().post('/api/v1/public/delete-account').send({ email: 'ravi@example.org', password: 'bad', confirm: true })).status, 401);
-  assert.equal((await api().post('/api/v1/public/delete-account').send({ email: 'ravi@example.org', password: 'Secret123', confirm: true })).status, 200);
-  assert.equal((await h.query('SELECT COUNT(*) n FROM accounts'))[0].n, 0);
+  const r = await api().post('/api/v1/public/delete-account').send({ email: 'ravi@example.org', password: 'Secret123', confirm: true });
+  assert.equal(r.status, 202);
+  const row = (await h.query('SELECT source, status FROM account_deletion_requests WHERE id = ?', [r.body.requestId]))[0];
+  assert.deepEqual({ ...row }, { source: 'web', status: 'pending' });
 });

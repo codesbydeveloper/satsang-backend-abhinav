@@ -95,7 +95,17 @@ test('admin can search users and manually set an age group; it is audited and su
   assert.ok(!JSON.stringify(s.body).includes('password'));
   const pid = u.profiles[0].id;
   const detail = await api().get(`/api/v1/admin/users/${u.account.id}`).set(bearer(b.token));
-  assert.ok(!JSON.stringify(detail.body).match(/password|pin_hash/i));
+  assert.ok(!JSON.stringify(detail.body).match(/password"|pin_hash/i));
+  assert.equal(detail.body.account.email, 'ravi@example.org');
+  assert.equal(detail.body.account.accountType, 'adult');
+  assert.equal(detail.body.account.emailVerified, true);
+  assert.equal(detail.body.account.parentPinSet, false);
+  assert.equal(detail.body.profiles.length, 1);
+  assert.equal(detail.body.profiles[0].username, 'ravi_k');
+  assert.equal(detail.body.profiles[0].avatarKey, 'waddles');
+  assert.equal(detail.body.profiles[0].age, 30);
+  assert.equal(detail.body.profiles[0].ageGroupOverridden, false);
+  assert.equal((await api().get('/api/v1/admin/users/999999').set(bearer(b.token))).status, 404);
 
   assert.equal((await api().patch(`/api/v1/admin/users/profiles/${pid}/age-group`).set(bearer(b.token)).send({ ageGroup: 'Vadil' })).status, 400); // reason required
   assert.equal((await api().patch(`/api/v1/admin/users/profiles/${pid}/age-group`).set(bearer(b.token)).send({ ageGroup: 'Nonsense', reason: 'test' })).status, 400);
@@ -133,4 +143,30 @@ test('logout and password change end admin sessions', async () => {
   assert.equal((await api().post('/api/v1/admin/auth/change-password').set(bearer(t2.token)).send({ currentPassword: 'AdminPassphrase1!', newPassword: 'short' })).status, 400);
   assert.equal((await api().post('/api/v1/admin/auth/change-password').set(bearer(t2.token)).send({ currentPassword: 'AdminPassphrase1!', newPassword: 'ABrandNewPassphrase9' })).status, 200);
   assert.equal((await api().get('/api/v1/admin/auth/me').set(bearer(t2.token))).status, 401);
+});
+
+test('admin deletes an account: needs confirm + reason, removes child profiles, ends sessions, is audited', async () => {
+  const boss = await h.makeAdmin('boss@example.org'); const b = await h.adminLogin(boss);
+  const ed = await h.makeAdmin('editor@example.org', 'content_editor'); const e = await h.adminLogin(ed);
+  const parent = await h.parentLogin('parent@example.org');
+  const c = await api().post('/api/v1/profiles').set(parent.auth)
+    .send({ pin: '1234', username: 'kid_one', avatarId: 2, dob: h.dobYearsAgo(8), parentalConsent: true });
+  assert.equal(c.status, 201, JSON.stringify(c.body));
+  const id = parent.account.id;
+  const url = `/api/v1/admin/users/${id}`;
+
+  assert.equal((await api().delete(url).set(bearer(b.token)).send({ reason: 'Requested by email' })).status, 400);   // confirm missing
+  assert.equal((await api().delete(url).set(bearer(b.token)).send({ confirm: true })).status, 400);                  // reason missing
+  assert.equal((await api().delete(url).set(bearer(e.token)).send({ confirm: true, reason: 'Requested by email' })).status, 403);
+  const r = await api().delete(url).set(bearer(b.token)).send({ confirm: true, reason: 'Requested by email' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { deleted: true, accountId: id, profilesDeleted: 1 });
+
+  assert.equal((await h.query('SELECT COUNT(*) AS n FROM profiles'))[0].n, 0);
+  assert.equal((await api().get('/api/v1/me').set(parent.auth)).status, 401);
+  assert.equal((await api().get(url).set(bearer(b.token))).status, 404);
+  assert.equal((await api().delete(url).set(bearer(b.token)).send({ confirm: true, reason: 'again' })).status, 404);
+  const log = (await h.query("SELECT details FROM audit_log WHERE action = 'user.deleted'"))[0];
+  assert.equal(log.details.reason, 'Requested by email');
+  assert.ok(!JSON.stringify(log.details).includes('parent@example.org'), 'no email kept after deletion');
 });

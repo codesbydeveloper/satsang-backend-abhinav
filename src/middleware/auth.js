@@ -12,7 +12,9 @@ async function requireAuth(req, _res, next) {
 
   const rows = await query('SELECT * FROM accounts WHERE id = ?', [payload.sub]);
   const account = rows[0];
-  if (!account || account.token_version !== payload.tv) throw unauthorized('TOKEN_REVOKED', 'Session is no longer valid. Please log in again.');
+  // The account is gone (deleted in the app, on another device or by an admin): the app shows its farewell screen.
+  if (!account) throw unauthorized('ACCOUNT_DELETED', 'This account has been deleted.');
+  if (account.token_version !== payload.tv) throw unauthorized('TOKEN_REVOKED', 'Session is no longer valid. Please log in again.');
   if (!account.email_verified_at) throw forbidden('EMAIL_NOT_VERIFIED', 'Please verify your email first');
 
   // the device session must still be active (logout / password change revoke it)

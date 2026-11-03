@@ -8,21 +8,30 @@ after(() => h.pool.end());
 
 const addChild = (p, over = {}) => api().post('/api/v1/profiles').set(p.auth).send({ pin: '1234', username: 'little_ram', avatarId: 2, dob: h.dobYearsAgo(8, 30), parentalConsent: true, ...over });
 
-test('parent starts in parent mode with no profiles; PIN is required before adding a child', async () => {
-  const reg = await api().post('/api/v1/auth/register').send({ email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true });
+test('parent starts in parent mode with no profiles; the first child comes before the PIN, the second needs it', async () => {
+  const reg = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true });
   assert.equal(reg.status, 201);
   const v = await api().post('/api/v1/auth/verify-email').send({ email: 'p@example.org', code: h.lastCode('p@example.org') });
   assert.equal(v.body.activeProfileId, null);
   assert.equal(v.body.profiles.length, 0);
   assert.equal(v.body.account.parentPinSet, false);
-  const noPin = await api().post('/api/v1/profiles').set(bearer(v.body.accessToken)).send({ pin: '1234', username: 'kid_one', avatarId: 1, dob: h.dobYearsAgo(8), parentalConsent: true });
-  assert.equal(noPin.status, 409); assert.equal(noPin.body.error.code, 'PIN_NOT_SET');
+  const auth = bearer(v.body.accessToken);
+  const kid = { avatarId: 1, dob: h.dobYearsAgo(8), parentalConsent: true };
+  // a PIN sent before one exists is refused
+  assert.equal((await api().post('/api/v1/profiles').set(auth).send({ ...kid, pin: '1234', username: 'kid_zero' })).body.error.code, 'PIN_NOT_SET');
+  const first = await api().post('/api/v1/profiles').set(auth).send({ ...kid, username: 'kid_one' });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  const second = await api().post('/api/v1/profiles').set(auth).send({ ...kid, username: 'kid_two' });
+  assert.equal(second.status, 409); assert.equal(second.body.error.code, 'PIN_NOT_SET');
+  // set the PIN without the password (the session was opened with it); now the parent area adds children without a PIN
+  assert.equal((await api().post('/api/v1/parent/pin').set(auth).send({ pin: '2468' })).status, 201);
+  assert.equal((await api().post('/api/v1/profiles').set(auth).send({ ...kid, username: 'kid_two' })).status, 201);
 });
 
 test('parent registration requires confirming 18+ and cannot carry a profile', async () => {
-  const a = await api().post('/api/v1/auth/register').send({ email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true });
+  const a = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true });
   assert.equal(a.status, 400);
-  const b = await api().post('/api/v1/auth/register').send({ email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true, profile: { username: 'abcd', avatarId: 1, dob: h.dobYearsAgo(40) } });
+  const b = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'p@example.org', password: 'Secret123', accountType: 'parent', acceptPrivacyPolicy: true, confirmAdult: true, profile: { username: 'abcd', avatarId: 1, dob: h.dobYearsAgo(40) } });
   assert.equal(b.status, 400);
 });
 
@@ -83,17 +92,27 @@ test('switching to a child needs the PIN, survives token refresh, and exiting ne
   assert.equal((await api().get('/api/v1/me').set(bearer(back.body.accessToken))).body.activeProfileId, null);
 });
 
-test('deleting one child profile keeps the parent and siblings; the deleted profile cannot stay active', async () => {
+test('deleting one child profile keeps the parent and siblings; devices playing as that child are logged out', async () => {
   const p = await h.parentLogin();
   const a = (await addChild(p, { username: 'child_aaa' })).body.profile;
   const b = (await addChild(p, { username: 'child_bbb' })).body.profile;
-  await api().post(`/api/v1/profiles/${a.id}/switch`).set(p.auth).send({ pin: '1234' });
+  // a second device plays as child a; this device stays in the parent area
+  const tablet = await api().post('/api/v1/auth/login').send({ email: 'parent@example.org', password: 'Secret123' });
+  const asA = bearer((await api().post('/api/v1/me/active-profile').set(bearer(tablet.body.accessToken)).send({ profileId: a.id })).body.accessToken);
+  assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(asA).send({ pin: '1234', confirm: true })).body.error.code, 'PARENT_MODE_REQUIRED');
   assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '0000', confirm: true })).status, 401);
-  assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '1234', confirm: true })).status, 200);
+  assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '1234' })).status, 400, 'confirm required');
+  const del = await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '1234', confirm: true });
+  assert.equal(del.status, 200);
+  assert.deepEqual(del.body, { deleted: true, profileId: a.id, sessionsEnded: 1 });
   const me = await api().get('/api/v1/me').set(p.auth);
   assert.deepEqual(me.body.profiles.map((x) => x.id), [b.id]);
-  assert.equal(me.body.activeProfileId, null);               // session fell back to parent mode
+  assert.equal(me.body.activeProfileId, null);
   assert.equal(me.body.account.email, 'parent@example.org');
+  // the device that was playing as the deleted child is logged out (never moved into the parent area)
+  assert.equal((await api().get('/api/v1/me').set(asA)).body.error.code, 'SESSION_ENDED');
+  assert.equal((await api().post('/api/v1/auth/refresh').send({ refreshToken: tablet.body.refreshToken })).status, 401);
+  assert.equal((await api().delete(`/api/v1/profiles/${a.id}`).set(p.auth).send({ pin: '1234', confirm: true })).status, 404, 'already deleted');
   // the username becomes available again
   assert.equal((await api().get('/api/v1/usernames/check').query({ username: 'child_aaa' })).body.available, true);
 });
@@ -102,8 +121,11 @@ test('deleting a parent account deletes every child profile', async () => {
   const p = await h.parentLogin();
   await addChild(p, { username: 'child_aaa' }); await addChild(p, { username: 'child_bbb' });
   assert.equal((await h.query('SELECT COUNT(*) n FROM profiles'))[0].n, 2);
-  assert.equal((await api().delete('/api/v1/me').set(p.auth).send({ password: 'Secret123', confirm: true })).status, 200);
+  const r = await api().delete('/api/v1/me').set(p.auth).send({ password: 'Secret123', confirm: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.profilesDeleted, 2);
   assert.equal((await h.query('SELECT COUNT(*) n FROM profiles'))[0].n, 0);
+  assert.equal((await h.query('SELECT COUNT(*) n FROM accounts'))[0].n, 0);
 });
 
 test('adult accounts cannot use parent-only endpoints', async () => {
@@ -125,8 +147,19 @@ test('avatars: exactly 16 (10 animal + 6 human); invalid avatar id rejected', as
   assert.equal(r.body.avatars.length, 16);
   assert.equal(r.body.avatars.filter((a) => a.kind === 'animal').length, 10);
   assert.equal(r.body.avatars.filter((a) => a.kind === 'human').length, 6);
-  const bad = await api().post('/api/v1/auth/register').send({ email: 'x@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'xxxx', avatarId: 17, dob: h.dobYearsAgo(30) } });
+  const bad = await api().post('/api/v1/auth/register').send({ ...h.NAMES, email: 'x@example.org', password: 'Secret123', accountType: 'adult', acceptPrivacyPolicy: true, profile: { username: 'xxxx', avatarId: 17, dob: h.dobYearsAgo(30) } });
   assert.equal(bad.status, 400);
+});
+
+test('avatars: the client set by id (3 Nov 2026): 1–10 named animals, 11–16 people', async () => {
+  const r = await api().get('/api/v1/avatars');
+  const keys = r.body.avatars.map((a) => a.key);
+  assert.deepEqual(keys, ['shadow', 'frosty', 'waddles', 'turbo', 'blaze', 'zippy', 'bamboo', 'ace', 'mango', 'coco',
+    'young_boy', 'young_man', 'gentleman', 'young_girl', 'young_woman', 'lady']);
+  assert.deepEqual(r.body.avatars.map((a) => a.id), Array.from({ length: 16 }, (_, i) => i + 1));
+  for (const a of r.body.avatars) assert.equal(a.kind, a.id <= 10 ? 'animal' : 'human', a.key);
+  assert.equal(r.body.avatars[0].label, 'Shadow');
+  assert.equal(r.body.avatars[15].label, 'Lady');
 });
 
 test('meta config exposes min app version, server time and the Eastern game day', async () => {

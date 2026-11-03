@@ -5,6 +5,7 @@
 **The three repos:** `satsang-spark-backend` (Node.js/Express + MySQL), `satsang-spark-admin` (React Admin Panel), `satsang-spark-app` (Unity 6, Android + iOS). They are built together; the backend's `/api-docs` is the contract between them.
 
 ## How to work (applies to every task)
+0. Always work in this folder. Use branches, never git worktrees or separate folders.
 1. Work on a branch named `m<N>/<short-topic>` (for example `m1/auth`) and open a pull request. Never push to `main` directly. Abhinav reviews and merges.
 2. Build only what the milestone in the contract lists. New ideas are **new scope** (chargeable, needs written approval from Loyadham first) — note them in the PR instead of building them.
 3. Every feature needs automated tests where the stack allows, and the tests must pass before the PR is opened. State what was and was not verified.
