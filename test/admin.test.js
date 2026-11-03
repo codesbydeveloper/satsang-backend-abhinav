@@ -102,7 +102,7 @@ test('admin can search users and manually set an age group; it is audited and su
   assert.equal(detail.body.account.parentPinSet, false);
   assert.equal(detail.body.profiles.length, 1);
   assert.equal(detail.body.profiles[0].username, 'ravi_k');
-  assert.equal(detail.body.profiles[0].avatarKey, 'animal_03');
+  assert.equal(detail.body.profiles[0].avatarKey, 'waddles');
   assert.equal(detail.body.profiles[0].age, 30);
   assert.equal(detail.body.profiles[0].ageGroupOverridden, false);
   assert.equal((await api().get('/api/v1/admin/users/999999').set(bearer(b.token))).status, 404);

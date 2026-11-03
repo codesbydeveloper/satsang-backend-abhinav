@@ -88,7 +88,7 @@ module.exports = {
   },
   paths: {
     '/meta/config': { get: op('Meta', 'App startup config: minimum supported app version, server time, age groups', { responses: { 200: ok('Config') } }) },
-    '/avatars': { get: op('Meta', 'The 16 fixed V1 avatars (10 animal, 6 human)', { responses: { 200: ok('Avatar list') } }) },
+    '/avatars': { get: op('Meta', 'The 16 fixed V1 avatars: ids 1–10 animal (shadow, frosty, waddles, turbo, blaze, zippy, bamboo, ace, mango, coco), 11–16 human (young_boy, young_man, gentleman, young_girl, young_woman, lady)', { responses: { 200: ok('Avatar list') } }) },
     '/usernames/check': { get: op('Meta', 'Is a username available and allowed?', {
       parameters: [{ name: 'username', in: 'query', required: true, schema: str() }],
       responses: { 200: ok('{ available, reason? } — reason is INVALID_FORMAT, BLOCKED_WORD, RESERVED or TAKEN') } }) },

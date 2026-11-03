@@ -151,6 +151,17 @@ test('avatars: exactly 16 (10 animal + 6 human); invalid avatar id rejected', as
   assert.equal(bad.status, 400);
 });
 
+test('avatars: the client set by id (3 Nov 2026): 1–10 named animals, 11–16 people', async () => {
+  const r = await api().get('/api/v1/avatars');
+  const keys = r.body.avatars.map((a) => a.key);
+  assert.deepEqual(keys, ['shadow', 'frosty', 'waddles', 'turbo', 'blaze', 'zippy', 'bamboo', 'ace', 'mango', 'coco',
+    'young_boy', 'young_man', 'gentleman', 'young_girl', 'young_woman', 'lady']);
+  assert.deepEqual(r.body.avatars.map((a) => a.id), Array.from({ length: 16 }, (_, i) => i + 1));
+  for (const a of r.body.avatars) assert.equal(a.kind, a.id <= 10 ? 'animal' : 'human', a.key);
+  assert.equal(r.body.avatars[0].label, 'Shadow');
+  assert.equal(r.body.avatars[15].label, 'Lady');
+});
+
 test('meta config exposes min app version, server time and the Eastern game day', async () => {
   const r = await api().get('/api/v1/meta/config');
   assert.equal(r.body.minAppVersion, '1.0.0');
