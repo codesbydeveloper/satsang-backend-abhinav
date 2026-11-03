@@ -5,7 +5,7 @@ const { ageGroupForDob } = require('./ageGroup');
 function profileView(p, { own = false } = {}) {
   const v = {
     id: p.id, username: p.username, avatarId: p.avatar_id, ageGroup: p.age_group,
-    isChild: !!p.is_child, language: p.language, mode: p.mode, createdAt: p.created_at,
+    isChild: !!p.is_child, language: p.language, contentLanguage: p.content_language || p.language, mode: p.mode, createdAt: p.created_at,
   };
   if (own) {
     v.dob = p.dob;

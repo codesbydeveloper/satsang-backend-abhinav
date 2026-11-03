@@ -55,7 +55,7 @@ async function requireParentArea(req, pin) {
 // before the Parent PIN exists (the app asks for the PIN right after); later children need the PIN to be set.
 const createSchema = z.object({
   pin: S.pin.optional(), username: S.username, avatarId: S.avatarId, dob: S.dob,
-  language: S.language.optional(), mode: S.mode.optional(), country: S.country.optional(),
+  language: S.language.optional(), contentLanguage: S.language.optional(), mode: S.mode.optional(), country: S.country.optional(),
   parentalConsent: z.literal(true, { error: 'Parental consent is required to create a child profile' }),
 });
 router.post('/', requireParent, validate(createSchema), async (req, res) => {
@@ -70,21 +70,22 @@ router.post('/', requireParent, validate(createSchema), async (req, res) => {
   if (!u.ok) throw badRequest('USERNAME_' + u.reason, 'That username cannot be used');
 
   const r = await query(
-    `INSERT INTO profiles (account_id, username, username_lower, avatar_id, dob, age_group, is_child, language, mode, country, consent_version, consent_at)
-     VALUES (?,?,?,?,?,?,1,?,?,?,?,UTC_TIMESTAMP())`,
+    `INSERT INTO profiles (account_id, username, username_lower, avatar_id, dob, age_group, is_child, language, content_language, mode, country, consent_version, consent_at)
+     VALUES (?,?,?,?,?,?,1,?,?,?,?,?,UTC_TIMESTAMP())`,
     [req.account.id, b.username.normalize('NFC'), lowerKey(b.username), b.avatarId, b.dob, ageGroupForDob(b.dob),
-      b.language || req.account.preferred_language, b.mode || null, b.country || null, config.privacyPolicyVersion]);
+      b.language || req.account.preferred_language, b.contentLanguage || b.language || req.account.preferred_language,
+      b.mode || null, b.country || null, config.privacyPolicyVersion]);
   const p = (await query('SELECT * FROM profiles WHERE id = ?', [r.insertId]))[0];
   res.status(201).json({ profile: profileView(p, { own: true }) });
 });
 
-// Change username / avatar / language / mode / country.
+// Change username / avatar / language / content language / mode / country.
 // - Parent in the parent area: any of their children, no PIN (the area itself is PIN-protected).
 // - Parent session playing as one child, editing a sibling: PIN required.
 // - The active profile itself: an adult changes avatar / language / mode / country; a parent's child only its avatar.
-//   A child's path, language, country and username are sensitive settings (contract 3.3): parent area or the Parent PIN.
+//   A child's path, languages, country and username are sensitive settings (contract 3.3): parent area or the Parent PIN.
 const patchSchema = z.object({
-  username: S.username.optional(), avatarId: S.avatarId.optional(), language: S.language.optional(),
+  username: S.username.optional(), avatarId: S.avatarId.optional(), language: S.language.optional(), contentLanguage: S.language.optional(),
   mode: S.mode.nullable().optional(), country: S.country.optional(), pin: S.pin.optional(),
 });
 router.patch('/:id', validate(idParam, 'params'), validate(patchSchema), async (req, res) => {
@@ -92,9 +93,10 @@ router.patch('/:id', validate(idParam, 'params'), validate(patchSchema), async (
   const isParent = req.account.account_type === 'parent';
   if (isParent && req.profileId && req.profileId !== p.id) await verifyPin(req.account, req.body.pin || '');
   else if (isParent && req.body.pin !== undefined) await verifyPin(req.account, req.body.pin);
-  const { username, avatarId, language, mode, country } = req.body;
-  if (isParent && req.profileId === p.id && req.body.pin === undefined && (language !== undefined || mode !== undefined || country !== undefined)) {
-    throw forbidden('PIN_REQUIRED', "A parent changes this child's path, language and country (Parent PIN)");
+  const { username, avatarId, language, contentLanguage, mode, country } = req.body;
+  if (isParent && req.profileId === p.id && req.body.pin === undefined
+    && (language !== undefined || contentLanguage !== undefined || mode !== undefined || country !== undefined)) {
+    throw forbidden('PIN_REQUIRED', "A parent changes this child's path, languages and country (Parent PIN)");
   }
   if (username !== undefined) {
     if (!isParent || (req.profileId === p.id && req.body.pin === undefined)) throw forbidden('USERNAME_PARENT_ONLY', 'Only a parent can change this username');
@@ -104,6 +106,7 @@ router.patch('/:id', validate(idParam, 'params'), validate(patchSchema), async (
   }
   if (avatarId !== undefined) await query('UPDATE profiles SET avatar_id = ? WHERE id = ?', [avatarId, p.id]);
   if (language !== undefined) await query('UPDATE profiles SET language = ? WHERE id = ?', [language, p.id]);
+  if (contentLanguage !== undefined) await query('UPDATE profiles SET content_language = ? WHERE id = ?', [contentLanguage, p.id]);
   if (mode !== undefined) await query('UPDATE profiles SET mode = ? WHERE id = ?', [mode, p.id]);
   if (country !== undefined) await query('UPDATE profiles SET country = ? WHERE id = ?', [country, p.id]);
   const fresh = (await query('SELECT * FROM profiles WHERE id = ?', [p.id]))[0];

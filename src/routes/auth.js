@@ -87,9 +87,9 @@ router.post('/register', authLimiter, ageGateFirst, validate(registerSchema), as
     if (b.profile) {
       const p = b.profile;
       await c.query(
-        `INSERT INTO profiles (account_id, username, username_lower, avatar_id, dob, age_group, is_child, language, mode)
-         VALUES (?,?,?,?,?,?,0,?,?)`,
-        [r.insertId, p.username.normalize('NFC'), lowerKey(p.username), p.avatarId, p.dob, ageGroupForDob(p.dob), b.language, p.mode || null]);
+        `INSERT INTO profiles (account_id, username, username_lower, avatar_id, dob, age_group, is_child, language, content_language, mode)
+         VALUES (?,?,?,?,?,?,0,?,?,?)`,
+        [r.insertId, p.username.normalize('NFC'), lowerKey(p.username), p.avatarId, p.dob, ageGroupForDob(p.dob), b.language, b.language, p.mode || null]);
     }
     return r.insertId;
   });
