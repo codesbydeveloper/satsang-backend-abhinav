@@ -4,6 +4,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const swaggerUi = require('swagger-ui-express');
 const config = require('./config');
+const { query } = require('./db');
 const { generalLimiter } = require('./middleware/rateLimit');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const openapi = require('./openapi');
@@ -17,13 +18,12 @@ function createApp() {
   if (config.env !== 'test') app.use(morgan('combined'));
   app.use(generalLimiter);
 
-  app.get('/', (_req, res) => res.json({
-    ok: true,
-    message: 'Satsang Spark API server is running',
-    env: config.env,
-    docs: '/api-docs',
-    health: '/health',
-  }));
+  // Root status check: no config values or error details, only whether the DB answers.
+  app.get('/', async (_req, res) => {
+    let database = 'connected';
+    try { await query('SELECT 1'); } catch { database = 'error'; }
+    res.json({ success: true, message: 'Satsang Spark API is running', status: 'ok', database });
+  });
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
   const api = express.Router();
