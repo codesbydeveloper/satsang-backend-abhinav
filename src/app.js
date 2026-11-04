@@ -17,6 +17,13 @@ function createApp() {
   if (config.env !== 'test') app.use(morgan('combined'));
   app.use(generalLimiter);
 
+  app.get('/', (_req, res) => res.json({
+    ok: true,
+    message: 'Satsang Spark API server is running',
+    env: config.env,
+    docs: '/api-docs',
+    health: '/health',
+  }));
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
   const api = express.Router();
