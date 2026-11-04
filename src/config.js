@@ -32,6 +32,8 @@ const config = {
   privacyPolicyVersion: process.env.PRIVACY_POLICY_VERSION || '1.0',
   parentalConsentAge: Number(process.env.PARENTAL_CONSENT_AGE || 13),
   bcryptRounds: process.env.NODE_ENV === 'test' ? 4 : 12,
+  // Temporary debugging switch: show the real error message in 500 responses even in production.
+  exposeErrors: bool(process.env.EXPOSE_ERRORS),
 };
 
 if (config.env === 'production') {

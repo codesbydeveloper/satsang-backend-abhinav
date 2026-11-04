@@ -72,7 +72,7 @@ test/               automated tests
 | Parent report | Daily active time works now. The learn/quiz/game/Sparks columns stay 0 until those features exist (Milestones 2–4). | `profile_daily_activity` |
 
 ## Deploying on Hostinger
-Node.js apps need a Hostinger plan that supports Node (VPS/Cloud, or a Node.js web-app plan); basic shared hosting usually cannot run this. On a VPS: install Node 20+, run `npm ci --omit=dev`, keep the process alive with PM2 (`pm2 start src/server.js --name satsang-api`), and put nginx in front with HTTPS (Let's Encrypt). The server trusts one proxy hop for the client IP (`trust proxy`). Set `NODE_ENV=production` and `CORS_ORIGINS` to the Admin Panel's address.
+Node.js apps need a Hostinger plan that supports Node (VPS/Cloud, or a Node.js web-app plan); basic shared hosting usually cannot run this. On a VPS: install Node 20+, run `npm ci --omit=dev`, keep the process alive with PM2 (`pm2 start src/server.js --name satsang-api`), and put nginx in front with HTTPS (Let's Encrypt). The server trusts one proxy hop for the client IP (`trust proxy`). Set `NODE_ENV=production` and `CORS_ORIGINS` to the Admin Panel's address. To debug a 500 on the live server, set `EXPOSE_ERRORS=true` temporarily (responses then carry the real error message instead of "Something went wrong"); remove it afterwards, because error messages can contain internal details.
 
 ## Not in this part yet (next in Milestone 1)
 The React **Admin Panel** screens and the **Unity** app screens (registration, login, avatar, profile switching, Parent PIN, deletion). This backend is what they connect to.

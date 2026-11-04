@@ -18,7 +18,7 @@ function errorHandler(err, req, res, _next) {
   // Never the request body or a database error's SQL/values: those may hold names, dates of birth or emails.
   const where = err && err.stack ? err.stack.split('\n').slice(0, 6).join('\n') : String(err);
   console.error('UNHANDLED', req.method, req.path, err && err.code, where);
-  res.status(500).json({ error: { code: 'INTERNAL', message: config.env === 'production' ? 'Something went wrong' : String(err.message) } });
+  res.status(500).json({ error: { code: 'INTERNAL', message: config.env === 'production' && !config.exposeErrors ? 'Something went wrong' : String(err.message) } });
 }
 
 module.exports = { errorHandler, notFoundHandler };
