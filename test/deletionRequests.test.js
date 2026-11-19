@@ -62,7 +62,7 @@ test('view: request, account and profiles without DOBs; audited', async () => {
   assert.equal((await h.query("SELECT COUNT(*) n FROM audit_log WHERE action = 'deletion_request.viewed'"))[0].n, 1);
 });
 
-test('approve deletes the account and child profiles, keeps no email, and cannot be repeated', async () => {
+test('approve deletes the account and child profiles, keeps only the retained email, and cannot be repeated', async () => {
   const { b, parent, fromWeb } = await setup();
   const url = `${URL}/${fromWeb.requestId}/approve`;
   assert.equal((await api().post(url).set(bearer(b.token)).send({})).status, 400);   // confirm required
@@ -75,7 +75,7 @@ test('approve deletes the account and child profiles, keeps no email, and cannot
 
   const done = await api().get(URL).set(bearer(b.token)).query({ status: 'completed' });
   assert.equal(done.body.rows.length, 1);
-  assert.equal(done.body.rows[0].email, null);
+  assert.equal(done.body.rows[0].email, 'parent@example.org');   // retained for 30 days, Full Admins only
   assert.equal(done.body.rows[0].childProfiles, 2);
   assert.equal(done.body.rows[0].decidedBy.name, 'boss');
   assert.equal(done.body.counts.pending, 1);
@@ -134,7 +134,7 @@ test('deleting in the app: completed at once, listed as source app with no admin
   assert.equal(row.accountId, solo.account.id);
   assert.equal(row.deletedByOwner, true);
   assert.equal(row.decidedBy, null);
-  assert.equal(row.email, null);
+  assert.equal(row.email, 'solo@example.org');   // retained for 30 days, Full Admins only
   assert.equal(row.username, null);
   assert.equal(row.profilesDeleted, 1);
   assert.equal(done.body.counts.pending, 0, 'in-app deletions never wait in the queue');

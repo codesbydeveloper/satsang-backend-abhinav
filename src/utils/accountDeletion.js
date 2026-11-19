@@ -9,9 +9,33 @@
  * cleared here, inside the same transaction. Referrals: the new user's row cascades; a deleted referrer becomes NULL
  * (ON DELETE SET NULL), so the new user keeps their reward.
  *
- * Nothing personal is kept or logged: the deletion_requests row keeps only ids, the account type, the source and
- * the number of profiles deleted.
+ * Nothing personal is kept or logged, with one exception (client approved, 19 Nov 2026): the deletion_requests row
+ * keeps the account's email in email_retained until email_retained_until (now + RETAINED_EMAIL_DAYS, default 30),
+ * shown to Full Admins only; src/utils/retainedEmails.js erases it after that. Otherwise the row keeps only ids,
+ * the account type, the source and the number of profiles deleted.
+ *
+ * The owner gets a confirmation email (to the parent's email for a parent account; child profiles have none). It is
+ * sent as the last step inside the transaction, before the deletion is committed. A mail failure is logged and never
+ * stops the deletion.
  */
+const config = require('../config');
+const mailer = require('./mailer');
+
+const MAIL_TIMEOUT_MS = 10000;   // don't hold the transaction open on a slow SMTP server
+
+async function sendDeletedEmail(email) {
+  let timer;
+  try {
+    await Promise.race([
+      mailer.sendAccountDeletedEmail(email),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timed out')), MAIL_TIMEOUT_MS); }),
+    ]);
+  } catch (err) {
+    console.error('account-deleted email failed:', err && err.message);   // no address, no secrets
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Delete an account and all its data. Call inside tx(). Closes a pending request for the account (e.g. a web-page
@@ -22,20 +46,29 @@
  * @returns {Promise<{profilesDeleted: number, requestId: number|null}>}
  */
 async function deleteAccountCompletely(c, account, { source = null, decidedBy = null, note = null } = {}) {
+  const email = ((await c.query('SELECT email FROM accounts WHERE id = ? FOR UPDATE', [account.id]))[0] || {}).email || null;
   const profilesDeleted = Number((await c.query('SELECT COUNT(*) AS n FROM profiles WHERE account_id = ?', [account.id]))[0].n);
   await c.query('DELETE FROM accounts WHERE id = ?', [account.id]);   // cascades: profiles + their data, tokens, codes
 
+  const days = config.retainedEmailDays;
+  let requestId = null;
   const pending = (await c.query("SELECT id FROM account_deletion_requests WHERE account_id = ? AND status = 'pending' FOR UPDATE", [account.id]))[0];
   if (pending) {
-    await c.query("UPDATE account_deletion_requests SET status = 'completed', profiles_deleted = ?, decided_by = ?, decided_at = UTC_TIMESTAMP(), decision_note = ? WHERE id = ?",
-      [profilesDeleted, decidedBy, note, pending.id]);
-    return { profilesDeleted, requestId: pending.id };
+    await c.query(
+      `UPDATE account_deletion_requests SET status = 'completed', profiles_deleted = ?, decided_by = ?, decided_at = UTC_TIMESTAMP(), decision_note = ?,
+              email_retained = ?, email_retained_until = IF(? IS NULL, NULL, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY)) WHERE id = ?`,
+      [profilesDeleted, decidedBy, note, email, email, days, pending.id]);
+    requestId = pending.id;
+  } else if (source) {
+    const r = await c.query(
+      `INSERT INTO account_deletion_requests (account_id, account_type, source, status, profiles_deleted, decided_by, decided_at, decision_note, email_retained, email_retained_until)
+       VALUES (?,?,?,'completed',?,?,UTC_TIMESTAMP(),?,?,IF(? IS NULL, NULL, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY)))`,
+      [account.id, account.account_type, source, profilesDeleted, decidedBy, note, email, email, days]);
+    requestId = r.insertId;
   }
-  if (!source) return { profilesDeleted, requestId: null };
-  const r = await c.query(
-    "INSERT INTO account_deletion_requests (account_id, account_type, source, status, profiles_deleted, decided_by, decided_at, decision_note) VALUES (?,?,?,'completed',?,?,UTC_TIMESTAMP(),?)",
-    [account.id, account.account_type, source, profilesDeleted, decidedBy, note]);
-  return { profilesDeleted, requestId: r.insertId };
+
+  if (email) await sendDeletedEmail(email);
+  return { profilesDeleted, requestId };
 }
 
 /**

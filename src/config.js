@@ -19,6 +19,8 @@ const config = {
   accessTokenTtl: process.env.ACCESS_TOKEN_TTL || '1h',
   refreshTokenDays: Number(process.env.REFRESH_TOKEN_DAYS || 60),
   adminTokenTtl: process.env.ADMIN_TOKEN_TTL || '8h',
+  // How long a deleted account's email stays on its deletion request (Full Admins only), then it is erased.
+  retainedEmailDays: Number(process.env.RETAINED_EMAIL_DAYS || 30),
   mail: {
     transport: process.env.MAIL_TRANSPORT || 'console',
     from: process.env.MAIL_FROM || 'Satsang Spark <no-reply@example.org>',

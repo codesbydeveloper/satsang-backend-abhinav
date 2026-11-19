@@ -15,19 +15,34 @@ const idParam = validate(z.object({ id: z.coerce.number().int().positive() }), '
 
 // Live account fields are joined only while the account still exists (pending / rejected).
 // Username is the adult's own profile; parent accounts have no profile of their own, so it is null.
+// A completed row may still hold the deleted account's email (email_retained) until email_retained_until;
+// retained_live is computed in SQL so the cut-off uses the database's UTC clock.
 const SELECT = `
   SELECT r.*, a.email, a.email_verified_at, a.created_at AS account_created, ad.name AS decided_by_name,
+         (r.email_retained IS NOT NULL AND r.email_retained_until > UTC_TIMESTAMP()) AS retained_live,
          (SELECT p.username FROM profiles p WHERE p.account_id = a.id AND p.is_child = 0 ORDER BY p.id LIMIT 1) AS username,
          (SELECT COUNT(*) FROM profiles p WHERE p.account_id = a.id AND p.is_child = 1) AS child_profiles
     FROM account_deletion_requests r
     LEFT JOIN accounts a ON a.id = r.account_id AND r.status <> 'completed'
     LEFT JOIN admins ad ON ad.id = r.decided_by`;
 
-const row = (r) => {
+/**
+ * Email shown for a request. Content Editors never see one. While the account exists it is the live email; once
+ * deleted, the retained copy, only before email_retained_until (RETAINED_EMAIL_DAYS after the deletion).
+ */
+const emailFor = (r, admin) => {
+  if (!admin || admin.role !== 'full_admin') return null;
+  if (r.status !== 'completed') return r.email || null;
+  return Number(r.retained_live) ? r.email_retained : null;
+};
+
+const row = (r, admin) => {
   const gone = r.status === 'completed';
+  const email = emailFor(r, admin);
   return {
     id: r.id, accountId: r.account_id, accountType: r.account_type, source: r.source, status: r.status,
-    username: gone ? null : r.username, email: gone ? null : r.email,
+    username: gone ? null : r.username, email,
+    emailRetainedUntil: gone && email ? r.email_retained_until : null,
     emailVerified: gone ? null : !!r.email_verified_at,
     childProfiles: gone ? (r.account_type === 'parent' ? r.profiles_deleted : 0) : Number(r.child_profiles),
     profilesDeleted: r.profiles_deleted, requestedAt: r.requested_at,
@@ -63,7 +78,7 @@ router.get('/', validate(listSchema, 'query'), async (req, res) => {
     `${SELECT} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}${statusWhere}
       ORDER BY r.requested_at DESC, r.id DESC LIMIT ? OFFSET ?`,
     [...params, ...(status === 'all' ? [] : [status]), pageSize, (page - 1) * pageSize]);
-  res.json({ status, page, pageSize, total: counts[status], counts, rows: rows.map(row) });
+  res.json({ status, page, pageSize, total: counts[status], counts, rows: rows.map((r) => row(r, req.admin)) });
 });
 
 // The "View" page: the request plus the account's profiles (while the account exists). No DOBs.
@@ -75,7 +90,7 @@ router.get('/:id', idParam, async (req, res) => {
        FROM profiles p JOIN avatars av ON av.id = p.avatar_id WHERE p.account_id = ? ORDER BY p.id`, [r.account_id]);
   await audit(req, 'deletion_request.viewed', { entityType: 'deletion_request', entityId: r.id });
   res.json({
-    request: row(r),
+    request: row(r, req.admin),
     account: r.status === 'completed' ? null : { id: r.account_id, email: r.email, accountType: r.account_type, emailVerified: !!r.email_verified_at, createdAt: r.account_created },
     profiles: profiles.map((p) => ({ id: p.id, username: p.username, isChild: !!p.is_child, ageGroup: p.age_group, avatarKey: p.avatar_key, createdAt: p.created_at })),
   });
@@ -118,3 +133,4 @@ router.post('/:id/reject', idParam, validate(z.object({ reason: z.string().trim(
 });
 
 module.exports = router;
+module.exports.emailFor = emailFor;   // for tests

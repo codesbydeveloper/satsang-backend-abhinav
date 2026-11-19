@@ -80,7 +80,9 @@ module.exports = {
         deletedByOwner: { type: 'boolean', description: 'True when the owner deleted the account in the app (completed, no admin decision)' },
         status: str({ enum: ['pending', 'completed', 'rejected'] }),
         username: str({ nullable: true, description: 'The adult’s own profile; null for parent accounts and once the account is deleted' }),
-        email: str({ nullable: true, description: 'Null once the account is deleted' }), emailVerified: { type: 'boolean', nullable: true },
+        email: str({ nullable: true, description: 'Full Admin only (null for every other role). While the account exists: its live email. Once deleted: the email kept on this request until emailRetainedUntil (RETAINED_EMAIL_DAYS, default 30 days after the deletion), then null — the purge job erases it.' }),
+        emailRetainedUntil: str({ nullable: true, description: 'UTC. Completed rows whose email is still shown: when it will be erased. Null otherwise.' }),
+        emailVerified: { type: 'boolean', nullable: true },
         childProfiles: int(), profilesDeleted: int({ nullable: true }), requestedAt: str({ description: 'UTC' }), decidedAt: str({ nullable: true, description: 'UTC' }),
         decidedBy: { ...obj({ id: int(), name: str() }), nullable: true }, decisionNote: str({ nullable: true, description: 'Rejection reason or approval note' }),
       }),
@@ -137,7 +139,8 @@ module.exports = {
       delete: op('Account', 'Delete the account now (password check). Irreversible.', {
         description: 'Deletes at once, in one transaction: the account, every profile (for a parent account every child profile too) and all their data '
           + '(progress, Sparks, Dress Up items, saved Shangars, referral link, leaderboard entries), and every session on every device. A completed '
-          + 'row (source `app`, ids and counts only) is kept in the deletion history; a pending web-page request for the account is closed. '
+          + 'row (source `app`, ids and counts only, plus the email for RETAINED_EMAIL_DAYS, shown to Full Admins only) is kept in the deletion history; a pending web-page request for the account is closed. '
+          + 'The owner is emailed "Your Satsang Spark account has been deleted"; a mail failure is logged and never stops the deletion. '
           + 'The public delete-account web page still files a request that a Full Admin approves. Errors: 401 `INVALID_CREDENTIALS` (wrong password), '
           + '403 `PARENT_MODE_REQUIRED` (a parent account while a child plays), 401 `ACCOUNT_DELETED` (already deleted: any call with a token of a deleted account answers this).',
         security: user, requestBody: body(obj({ password: str(), confirm: { type: 'boolean', enum: [true] } }, ['password', 'confirm'])),
@@ -322,7 +325,7 @@ module.exports = {
       security: admin,
       parameters: [
         { name: 'status', in: 'query', schema: str({ enum: ['pending', 'completed', 'rejected', 'all'], default: 'pending' }) },
-        { name: 'q', in: 'query', schema: str(), description: 'Username or email (pending/rejected rows only; completed rows keep neither)' },
+        { name: 'q', in: 'query', schema: str(), description: 'Username or live email (pending/rejected rows only; a completed row’s retained email is not searchable)' },
         { name: 'source', in: 'query', schema: str({ enum: ['app', 'web', 'all'], default: 'all' }) },
         { name: 'page', in: 'query', schema: int({ default: 1 }) }, { name: 'pageSize', in: 'query', schema: int({ default: 25, maximum: 100 }) },
       ],
@@ -333,7 +336,7 @@ module.exports = {
       responses: { 200: ok('Request detail', obj({ request: ref('DeletionRequest'),
         account: { ...obj({ id: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), emailVerified: bool(), createdAt: str({ description: 'UTC' }) }), nullable: true, description: 'Null once completed' },
         profiles: { type: 'array', items: obj({ id: int(), username: str(), isChild: bool(), ageGroup: ref('AgeGroup'), avatarKey: str(), createdAt: str({ description: 'UTC' }) }) } })), ...errors(401, 403, 404) } }) },
-    '/admin/deletion-requests/{id}/approve': { post: op('Admin Deletion Requests', 'Approve: permanently deletes the account and all its profiles (a parent’s child profiles too) and ends the user’s sessions. Audited as deletion_request.approved, without email or username.', {
+    '/admin/deletion-requests/{id}/approve': { post: op('Admin Deletion Requests', 'Approve: permanently deletes the account and all its profiles (a parent’s child profiles too) and ends the user’s sessions. The owner is emailed a deletion confirmation (a mail failure never stops the deletion); the email is kept on the request for RETAINED_EMAIL_DAYS (Full Admins only). Audited as deletion_request.approved, without email or username.', {
       security: admin, parameters: [idParam], requestBody: body(obj({ confirm: { type: 'boolean', enum: [true] }, note: str({ description: 'Optional, up to 200 chars' }) }, ['confirm'])),
       responses: { 200: ok('Deleted', obj({ id: int(), status: str({ enum: ['completed'] }), accountId: int(), profilesDeleted: int() })), ...errors(400, 401, 403, 404, 409) } }) },
     '/admin/deletion-requests/{id}/reject': { post: op('Admin Deletion Requests', 'Reject: the account is kept. Reason is required and audited as deletion_request.rejected. The owner can ask again.', {

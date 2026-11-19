@@ -12,6 +12,7 @@
     "dev": "node --watch src/server.js",
     "migrate": "node scripts/migrate.js",
     "seed:admin": "node scripts/seed-admin.js",
+    "purge:retained-emails": "node scripts/purge-retained-emails.js",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\""
   },
   "dependencies": {

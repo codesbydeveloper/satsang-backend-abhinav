@@ -2,6 +2,7 @@ const config = require('./config');
 const { createApp } = require('./app');
 const { pool } = require('./db');
 const { refreshAllAgeGroups } = require('./utils/profiles');
+const { schedulePurge } = require('./utils/retainedEmails');
 
 const app = createApp();
 const server = app.listen(config.port, async () => {
@@ -27,3 +28,6 @@ server.on('error', (err) => {
 
 // Keep stored age groups current as birthdays pass (also refreshed lazily on login/profile loads).
 setInterval(() => refreshAllAgeGroups().catch((e) => console.error('age-group refresh failed', e)), 6 * 60 * 60 * 1000).unref();
+
+// Erase deleted accounts' retained emails once their RETAINED_EMAIL_DAYS are over: now and every 24 hours.
+schedulePurge();
