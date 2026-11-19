@@ -66,9 +66,9 @@ const deviceHash = (deviceId) => (deviceId
   ? crypto.createHmac('sha256', config.jwtSecret).update('referral-device:' + deviceId).digest('hex')
   : null);
 
-/** Seconds since the account was created, measured by MySQL (created_at and NOW() share the server's clock and zone). */
+/** Seconds since the account was created, measured by MySQL's UTC clock (created_at is stored in UTC). */
 async function accountAgeSeconds(q, accountId) {
-  const row = (await q("SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age FROM accounts WHERE id = ?", [accountId]))[0];
+  const row = (await q("SELECT TIMESTAMPDIFF(SECOND, created_at, UTC_TIMESTAMP()) AS age FROM accounts WHERE id = ?", [accountId]))[0];
   return row ? Number(row.age) : Infinity;
 }
 

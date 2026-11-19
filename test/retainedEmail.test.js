@@ -73,7 +73,7 @@ test('Full Admin sees the retained email for 30 days on list and detail; nothing
 
   const l = await api().get(URL).set(bearer(b.token)).query({ status: 'completed' });
   assert.equal(l.body.rows[0].email, 'ravi@example.org');
-  assert.equal(l.body.rows[0].emailRetainedUntil, db.email_retained_until);
+  assert.equal(l.body.rows[0].emailRetainedUntil, db.email_retained_until.replace(' ', 'T') + '.000Z', 'ISO UTC');
   assert.equal(l.body.rows[0].username, null);
   const v = await api().get(`${URL}/${db.id}`).set(bearer(b.token));
   assert.equal(v.body.request.email, 'ravi@example.org');
@@ -104,7 +104,7 @@ test('the email is hidden once email_retained_until has passed, even before the 
   await h.query('UPDATE account_deletion_requests SET email_retained_until = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE)');
   const l = await api().get(URL).set(bearer(b.token)).query({ status: 'completed' });
   assert.equal(l.body.rows[0].email, null);
-  assert.equal(l.body.rows[0].emailRetainedUntil, null);
+  assert.ok(Date.parse(l.body.rows[0].emailRetainedUntil) < Date.now(), 'the past cut-off is still sent, so the panel can show "erased"');
   const id = l.body.rows[0].id;
   assert.equal((await api().get(`${URL}/${id}`).set(bearer(b.token))).body.request.email, null);
 });
@@ -128,4 +128,27 @@ test('purge erases expired retained emails only and audits the count', async () 
 
   assert.equal(await purgeRetainedEmails(), 0, 'nothing left to erase');
   assert.equal((await h.query("SELECT COUNT(*) n FROM audit_log WHERE action = 'retained_emails.purged'"))[0].n, 1, 'no audit row when nothing was erased');
+});
+
+test('search: a Full Admin finds a completed row by its retained email, only until it is erased', async () => {
+  const b = await h.adminLogin(await h.makeAdmin('boss@example.org'));
+  const adult = await h.adultLogin('ravi@example.org', 'ravi_k');
+  await deleteInApp(adult.accessToken);
+  await h.adultLogin('other@example.org', 'other_one');
+  await api().post('/api/v1/public/delete-account').send({ email: 'other@example.org', password: 'Secret123', confirm: true });
+
+  const find = (q) => api().get(URL).set(bearer(b.token)).query({ status: 'all', q });
+  let l = await find('ravi@');
+  assert.equal(l.status, 200);
+  assert.deepEqual(l.body.rows.map((r) => [r.status, r.email]), [['completed', 'ravi@example.org']]);
+  assert.deepEqual(l.body.counts, { pending: 0, completed: 1, rejected: 0, all: 1 });
+  l = await find('other@');
+  assert.deepEqual(l.body.rows.map((r) => [r.status, r.email]), [['pending', 'other@example.org']], 'live emails still match');
+  l = await find('ravi_k');
+  assert.equal(l.body.rows.length, 0, 'a deleted account cannot be found by its username');
+
+  await h.query('UPDATE account_deletion_requests SET email_retained_until = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE) WHERE account_id = ?', [adult.account.id]);
+  l = await find('ravi@');
+  assert.equal(l.body.rows.length, 0, 'not searchable once past email_retained_until, even before the purge');
+  assert.equal(l.body.counts.all, 0);
 });

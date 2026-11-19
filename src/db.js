@@ -10,6 +10,14 @@ const pool = mysql.createPool({
   dateStrings: true,      // return DATE/DATETIME as strings, not JS Dates
 });
 
+// `timezone: 'Z'` above only covers JS Dates that mysql2 converts. NOW(), CURRENT_TIMESTAMP and the
+// `DEFAULT CURRENT_TIMESTAMP` columns (created_at, requested_at, ...) follow the MySQL *session* time zone,
+// which is the server's local zone unless set. Pin every pooled connection to UTC so all DATETIMEs are UTC.
+// A connection runs its queries in order, so this always runs before that connection's first real query.
+pool.on('connection', (conn) => {
+  conn.query("SET time_zone = '+00:00'", (err) => { if (err) console.error('Could not set the MySQL session time zone to UTC:', err.message); });
+});
+
 /** Run a query and return rows (SELECT) or the result header (INSERT/UPDATE/DELETE). */
 async function query(sql, params = []) {
   const [rows] = await pool.query(sql, params);

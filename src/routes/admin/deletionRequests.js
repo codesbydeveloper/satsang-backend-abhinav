@@ -42,7 +42,7 @@ const row = (r, admin) => {
   return {
     id: r.id, accountId: r.account_id, accountType: r.account_type, source: r.source, status: r.status,
     username: gone ? null : r.username, email,
-    emailRetainedUntil: gone && email ? r.email_retained_until : null,
+    emailRetainedUntil: gone ? r.email_retained_until : null,   // not personal: lets the panel say 'erased' once it has passed
     emailVerified: gone ? null : !!r.email_verified_at,
     childProfiles: gone ? (r.account_type === 'parent' ? r.profiles_deleted : 0) : Number(r.child_profiles),
     profilesDeleted: r.profiles_deleted, requestedAt: r.requested_at,
@@ -63,8 +63,11 @@ router.get('/', validate(listSchema, 'query'), async (req, res) => {
   const { status, q, source, page, pageSize } = req.validated.query;
   const where = []; const params = [];
   if (q) {
-    where.push('(a.email LIKE ? OR EXISTS (SELECT 1 FROM profiles p WHERE p.account_id = a.id AND p.username LIKE ?))');
-    params.push(like(q), like(q));
+    // Completed rows have no live account; a Full Admin can still find one by its retained email until it is erased.
+    const retained = req.admin.role === 'full_admin'
+      ? " OR (r.status = 'completed' AND r.email_retained_until > UTC_TIMESTAMP() AND r.email_retained LIKE ?)" : '';
+    where.push(`(a.email LIKE ? OR EXISTS (SELECT 1 FROM profiles p WHERE p.account_id = a.id AND p.username LIKE ?)${retained})`);
+    params.push(like(q), like(q), ...(retained ? [like(q)] : []));
   }
   if (source !== 'all') { where.push('r.source = ?'); params.push(source); }
   const base = `FROM account_deletion_requests r LEFT JOIN accounts a ON a.id = r.account_id AND r.status <> 'completed' ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;

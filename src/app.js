@@ -8,10 +8,12 @@ const { query } = require('./db');
 const { generalLimiter } = require('./middleware/rateLimit');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const openapi = require('./openapi');
+const { jsonTimestamps } = require('./utils/time');
 
 function createApp() {
   const app = express();
   app.set('trust proxy', 1);                       // behind Hostinger's reverse proxy: use the real client IP
+  app.set('json replacer', jsonTimestamps);        // DATETIMEs (UTC) leave the API as ISO strings ending in "Z"
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(cors({ origin: config.corsOrigins.length ? config.corsOrigins : false, credentials: false }));
   app.use(express.json({ limit: '100kb' }));
