@@ -68,7 +68,7 @@ Each error:
 | `PARENT_MODE_REQUIRED` | a parent account applies from a child's session | `403` |
 
 ## 5. Admin: referral settings and list (Full Admin only)
-Log in as a Full Admin (`POST /admin/auth/login`, then `POST /admin/auth/totp/verify` with the authenticator code) to
+Log in as a Full Admin (`POST /admin/auth/login`, then `POST /admin/auth/verify-otp` with the emailed code; see `postman-admin-19nov.md` section 7) to
 get `<adminToken>`.
 ```bash
 curl -s http://localhost:3000/api/v1/admin/referrals/settings -H "Authorization: Bearer <adminToken>"

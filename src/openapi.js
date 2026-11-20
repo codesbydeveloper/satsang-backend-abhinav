@@ -12,7 +12,6 @@ const idParam = { name: 'id', in: 'path', required: true, schema: int() };
 const errors = (...codes) => Object.fromEntries(codes.map((c) => [String(c), { description: { 400: 'Validation or business-rule error', 401: 'Not logged in / wrong credentials', 403: 'Not allowed', 404: 'Not found', 409: 'Conflict', 429: 'Too many attempts' }[c], content: json(ref('Error')) }]));
 const user = [{ userBearer: [] }];
 const admin = [{ adminBearer: [] }];
-const adminStep = [{ adminBearer: [] }];
 
 const op = (tag, summary, o = {}) => ({ tags: [tag], summary, ...o });
 
@@ -24,11 +23,11 @@ module.exports = {
     description: [
       'Backend for the Satsang Spark mobile app and Admin Panel.',
       '',
-      '**Milestone 1 covers:** registration/login with email verification, password reset, adult and parent accounts, playable (child) profiles, 16 fixed avatars, DOB-based age groups, Parent PIN, account/profile deletion, and the Admin Panel foundation (Full Admin / Content Editor roles, TOTP 2FA, audit log).',
+      '**Milestone 1 covers:** registration/login with email verification, password reset, adult and parent accounts, playable (child) profiles, 16 fixed avatars, DOB-based age groups, Parent PIN, account/profile deletion, and the Admin Panel foundation (Full Admin / Content Editor roles, email login code (2FA), audit log).',
       '',
       '**Conventions:** all paths are under `/api/v1`. Errors look like `{ "error": { "code", "message", "details?" } }`. Dates of birth are `YYYY-MM-DD` and are never returned for other users. Timestamps are stored in UTC and returned as ISO 8601 UTC strings ending in `Z` (e.g. `2026-11-19T12:02:37.000Z`); clients show them in the viewer’s local time. Server time is authoritative; game days use America/New_York.',
       '',
-      '**Users:** log in, then send `Authorization: Bearer <accessToken>`. Renew with `/auth/refresh`. **Admins:** three steps — `/admin/auth/login` (password) → `/admin/auth/totp/verify` (or `/totp/setup` + `/totp/enable` the first time) → send the returned token as `Authorization: Bearer`.',
+      '**Users:** log in, then send `Authorization: Bearer <accessToken>`. Renew with `/auth/refresh`. **Admins:** two steps — `/admin/auth/login` (email + password; a 6-digit code is emailed and a `challengeToken` returned) → `/admin/auth/verify-otp` (`challengeToken` + code) → send the returned token as `Authorization: Bearer`. `/admin/auth/resend-otp` sends a new code.',
     ].join('\n'),
   },
   servers: [{ url: '/api/v1' }],
@@ -39,7 +38,7 @@ module.exports = {
   components: {
     securitySchemes: {
       userBearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'App access token from login / verify-email / refresh.' },
-      adminBearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Admin token from the 2FA step (the step tokens from /admin/auth/login are only accepted by the TOTP endpoints).' },
+      adminBearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Admin token from /admin/auth/verify-otp. The challengeToken from /admin/auth/login is not an admin token: it only goes in the body of verify-otp / resend-otp.' },
     },
     schemas: {
       Error: obj({ error: obj({ code: str(), message: str(), details: { description: 'VALIDATION_ERROR: [{ field, message }]. PIN_INCORRECT: { attemptsLeft }. PIN_LOCKED: { retryAfterSeconds }.', oneOf: [{ type: 'array', items: obj({ field: str(), message: str() }) }, obj({ attemptsLeft: int(), retryAfterSeconds: int() })] } }) }),
@@ -73,7 +72,7 @@ module.exports = {
         })],
       },
       AuthResponse: obj({ accessToken: str(), refreshToken: str(), account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) }),
-      Admin: obj({ id: int(), email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), totpEnabled: bool() }),
+      Admin: obj({ id: int(), email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }) }),
       DeletionRequestFiled: obj({ requested: bool(), requestId: int(), status: str({ enum: ['pending'] }), requestedAt: str({ format: 'date-time', description: 'ISO 8601 UTC' }) }),
       DeletionRequest: obj({
         id: int(), accountId: int(), accountType: str({ enum: ['adult', 'parent'] }), source: str({ enum: ['app', 'web'], description: 'app = deleted in the app (always completed, no admin decision), web = public delete-account page (pending until a Full Admin decides)' }),
@@ -252,14 +251,15 @@ module.exports = {
     '/parent/report': { get: op('Parent PIN', 'Parent report: daily time and activity per child (parent mode only)', {
       security: user, parameters: [{ name: 'profileId', in: 'query', schema: int() }, { name: 'days', in: 'query', schema: int({ minimum: 1, maximum: 90, default: 7 }) }], responses: { 200: ok('Report'), ...errors(401, 403, 404) } }) },
 
-    '/admin/auth/login': { post: op('Admin Auth', 'Step 1: email + password. Returns which 2FA step comes next and a 10-minute step token.', {
-      requestBody: body(obj({ email: str(), password: str() }, ['email', 'password'])), responses: { 200: ok('{ step: "totp_setup" | "totp_verify", stepToken }'), ...errors(401, 429) } }) },
-    '/admin/auth/totp/setup': { post: op('Admin Auth', 'First login only: generate the authenticator secret and QR code (send the step token as Bearer)', {
-      security: adminStep, responses: { 200: ok('{ secret, otpauthUrl, qrDataUrl }'), ...errors(401) } }) },
-    '/admin/auth/totp/enable': { post: op('Admin Auth', 'First login only: confirm with the first code; returns the admin token', {
-      security: adminStep, requestBody: body(obj({ code: str() }, ['code'])), responses: { 200: ok('{ token, admin }'), ...errors(401, 429) } }) },
-    '/admin/auth/totp/verify': { post: op('Admin Auth', 'Normal login step 2: 6-digit authenticator code; returns the admin token', {
-      security: adminStep, requestBody: body(obj({ code: str() }, ['code'])), responses: { 200: ok('{ token, admin }'), ...errors(401, 429) } }) },
+    '/admin/auth/login': { post: op('Admin Auth', 'Step 1: email + password. If correct (and the admin is active), a 6-digit code is emailed ("Your Satsang Spark admin login code", valid 10 minutes) and a single-use challenge token (10 minutes) is returned. No admin token yet. Wrong email or password: the same 401 INVALID_CREDENTIALS. 5 failures (password or code) lock the admin for 15 minutes: 429 ADMIN_LOCKED.', {
+      requestBody: body(obj({ email: str(), password: str() }, ['email', 'password'])),
+      responses: { 200: ok('Code emailed', obj({ step: str({ enum: ['email_otp'] }), challengeToken: str(), expiresInSeconds: int({ example: 600 }), resendAfterSeconds: int({ example: 60 }) })), ...errors(400, 401, 429), 503: { description: 'EMAIL_FAILED: the code could not be sent', content: json(ref('Error')) } } }) },
+    '/admin/auth/verify-otp': { post: op('Admin Auth', 'Step 2: the emailed code. Correct → the admin token (the challenge is used up). Errors: 401 OTP_INVALID (details.attemptsLeft), 401 OTP_EXPIRED (request a new code or log in again), 429 OTP_LOCKED after 5 wrong tries (log in again), 401 CHALLENGE_INVALID (used, replaced by a newer login, or expired), 429 ADMIN_LOCKED.', {
+      requestBody: body(obj({ challengeToken: str(), code: str({ pattern: '^\\d{6}$', example: '123456' }) }, ['challengeToken', 'code'])),
+      responses: { 200: ok('Logged in', obj({ token: str(), admin: ref('Admin') })), ...errors(400, 401, 429) } }) },
+    '/admin/auth/resend-otp': { post: op('Admin Auth', 'Email a new code for the same login; the previous code stops working and the 5 tries start again. At most once per 60 seconds (429 RESEND_TOO_SOON, details.retryAfterSeconds) and 5 times per login (429 RESEND_LIMIT). Not after OTP_LOCKED.', {
+      requestBody: body(obj({ challengeToken: str() }, ['challengeToken'])),
+      responses: { 200: ok('New code emailed', obj({ sent: bool(), expiresInSeconds: int({ example: 600 }), resendAfterSeconds: int({ example: 60 }), resendsLeft: int() })), ...errors(400, 401, 429), 503: { description: 'EMAIL_FAILED', content: json(ref('Error')) } } }) },
     '/admin/auth/me': { get: op('Admin Auth', 'Who am I', { security: admin, responses: { 200: ok('Admin', obj({ admin: ref('Admin') })), ...errors(401) } }) },
     '/admin/auth/logout': { post: op('Admin Auth', 'End all of this admin’s sessions', { security: admin, responses: { 200: ok('ok'), ...errors(401) } }) },
     '/admin/auth/change-password': { post: op('Admin Auth', 'Change own password (12+ chars); sessions end', {
@@ -267,12 +267,11 @@ module.exports = {
 
     '/admin/admins': {
       get: op('Admin Management', 'List admins (Full Admin)', { security: admin, responses: { 200: ok('Admins'), ...errors(401, 403) } }),
-      post: op('Admin Management', 'Create an admin (Full Admin). They set up 2FA at first login.', {
+      post: op('Admin Management', 'Create an admin (Full Admin). Each login: password, then a code emailed to this address.', {
         security: admin, requestBody: body(obj({ email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), temporaryPassword: str({ description: '12+ chars' }) }, ['email', 'role', 'temporaryPassword'])), responses: { 201: ok('Created'), ...errors(400, 401, 403, 409) } }),
     },
     '/admin/admins/{id}': { patch: op('Admin Management', 'Rename, change role, or deactivate. The last active Full Admin cannot be removed.', {
       security: admin, parameters: [idParam], requestBody: body(obj({ name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), isActive: bool() }), false), responses: { 200: ok('Updated'), ...errors(400, 401, 403, 404) } }) },
-    '/admin/admins/{id}/reset-2fa': { post: op('Admin Management', 'Remove an admin’s authenticator so they enrol a new one', { security: admin, parameters: [idParam], responses: { 200: ok('ok'), ...errors(401, 403, 404) } }) },
     '/admin/admins/{id}/reset-password': { post: op('Admin Management', 'Set a new password for an admin', {
       security: admin, parameters: [idParam], requestBody: body(obj({ newPassword: str() }, ['newPassword'])), responses: { 200: ok('ok'), ...errors(400, 401, 403, 404) } }) },
 

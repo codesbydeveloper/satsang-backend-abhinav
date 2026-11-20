@@ -1,7 +1,6 @@
 process.env.NODE_ENV = 'test';
 const request = require('supertest');
 const bcrypt = require('bcryptjs');
-const { authenticator } = require('otplib');
 const { createApp } = require('../src/app');
 const { query, pool } = require('../src/db');
 const { outbox } = require('../src/utils/mailer');
@@ -13,7 +12,7 @@ async function resetDb() {
   // tests TRUNCATE tables — never allow them to run against a real database
   if (!/_test$/.test(require('../src/config').db.database)) throw new Error('Refusing to run tests: DB_NAME in .env.test must end with _test');
   await query('SET FOREIGN_KEY_CHECKS = 0');
-  for (const t of ['referrals', 'explore_import_items', 'explore_imports', 'account_deletion_requests', 'audit_log', 'profile_activity_minutes', 'profile_daily_activity', 'refresh_tokens', 'email_codes', 'signup_bonuses', 'profiles', 'accounts', 'admins']) await query(`TRUNCATE TABLE ${t}`);
+  for (const t of ['referrals', 'explore_import_items', 'explore_imports', 'account_deletion_requests', 'audit_log', 'admin_login_codes', 'profile_activity_minutes', 'profile_daily_activity', 'refresh_tokens', 'email_codes', 'signup_bonuses', 'profiles', 'accounts', 'admins']) await query(`TRUNCATE TABLE ${t}`);
   await query('SET FOREIGN_KEY_CHECKS = 1');
   await query("UPDATE app_settings SET value = CASE setting_key WHEN 'referral_new_user_sparks' THEN '25' WHEN 'referral_referrer_sparks' THEN '50' WHEN 'referral_window_hours' THEN '48' ELSE NULL END, updated_by = NULL");
   outbox.length = 0;
@@ -61,19 +60,19 @@ async function makeAdmin(email, role = 'full_admin', password = 'AdminPassphrase
   return { id: r.insertId, email, password };
 }
 
-/** Full admin login incl. first-time 2FA enrolment; returns { token, secret }. */
-async function adminLogin(admin, secretIfKnown) {
+/** The 6-digit admin login code in the latest email to `to`. */
+const lastAdminCode = (to) => {
+  const m = [...outbox].reverse().find((x) => x.to === to && x.subject === 'Your Satsang Spark admin login code');
+  return m && m.text.match(/Your login code is (\d{6})\./)[1];
+};
+
+/** Full admin login: password, then the emailed code. Returns { token, admin }. */
+async function adminLogin(admin) {
   const l = await api().post('/api/v1/admin/auth/login').send({ email: admin.email, password: admin.password });
   if (l.status !== 200) throw new Error('admin login failed: ' + JSON.stringify(l.body));
-  if (l.body.step === 'totp_setup') {
-    const s = await api().post('/api/v1/admin/auth/totp/setup').set(bearer(l.body.stepToken));
-    const e = await api().post('/api/v1/admin/auth/totp/enable').set(bearer(l.body.stepToken)).send({ code: authenticator.generate(s.body.secret) });
-    if (e.status !== 200) throw new Error('enable failed: ' + JSON.stringify(e.body));
-    return { token: e.body.token, secret: s.body.secret };
-  }
-  const v = await api().post('/api/v1/admin/auth/totp/verify').set(bearer(l.body.stepToken)).send({ code: authenticator.generate(secretIfKnown) });
-  if (v.status !== 200) throw new Error('verify failed: ' + JSON.stringify(v.body));
-  return { token: v.body.token, secret: secretIfKnown };
+  const v = await api().post('/api/v1/admin/auth/verify-otp').send({ challengeToken: l.body.challengeToken, code: lastAdminCode(admin.email) });
+  if (v.status !== 200) throw new Error('verify-otp failed: ' + JSON.stringify(v.body));
+  return { token: v.body.token, admin: v.body.admin };
 }
 
-module.exports = { NAMES, api, resetDb, lastCode, dobYearsAgo, adultLogin, parentLogin, bearer, makeAdmin, adminLogin, query, pool, outbox };
+module.exports = { NAMES, api, resetDb, lastCode, dobYearsAgo, adultLogin, parentLogin, bearer, makeAdmin, adminLogin, lastAdminCode, query, pool, outbox };

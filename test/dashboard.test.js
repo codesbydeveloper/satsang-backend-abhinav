@@ -30,7 +30,7 @@ test('dashboard returns live counts, chart, recent sign-ups and admin activity',
   assert.equal(b.recentRegistrations.find((x) => x.type === 'parent').username, null);
   assert.ok(!JSON.stringify(b.recentRegistrations).includes('@'), 'no emails in recent registrations');
   assert.ok(!JSON.stringify(b).includes('"dob"'), 'no DOBs');
-  assert.ok(b.recentAdminActivity.some((x) => x.action === 'admin.login' && x.adminName === 'boss'));
+  assert.ok(b.recentAdminActivity.some((x) => x.action === 'admin.login_success' && x.adminName === 'boss'));
 
   const month = await api().get('/api/v1/admin/dashboard?days=30').set(bearer(token));
   assert.equal(month.body.registrations.series.length, 30);

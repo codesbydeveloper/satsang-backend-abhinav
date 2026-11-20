@@ -11,6 +11,8 @@ module.exports = {
   authLimiter: make(15 * 60 * 1000, 30),          // register / login / refresh
   codeLimiter: make(60 * 60 * 1000, 10),          // anything that sends an email code
   usernameLimiter: make(60 * 1000, 30),           // username availability checks
-  adminLimiter: make(15 * 60 * 1000, 20),         // admin login steps
+  adminLimiter: make(15 * 60 * 1000, 20),         // admin login (email + password)
+  adminOtpLimiter: make(15 * 60 * 1000, 20),      // admin verify-otp (per IP; each code also allows only 5 tries)
+  adminResendLimiter: make(15 * 60 * 1000, 10),   // admin resend-otp (per IP; each login also allows only 5 resends)
   generalLimiter: make(60 * 1000, 300),
 };

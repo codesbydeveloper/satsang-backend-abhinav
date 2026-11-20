@@ -1,27 +1,28 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const QRCode = require('qrcode');
-const { authenticator } = require('otplib');
 const { z } = require('zod');
 const config = require('../../config');
 const { query } = require('../../db');
 const validate = require('../../middleware/validate');
-const { adminLimiter } = require('../../middleware/rateLimit');
-const { signStepToken, signAdminToken, requireAdmin, requireStep } = require('../../middleware/adminAuth');
+const { adminLimiter, adminOtpLimiter, adminResendLimiter } = require('../../middleware/rateLimit');
+const { CHALLENGE_MINUTES, signChallengeToken, signAdminToken, loadChallenge, requireAdmin } = require('../../middleware/adminAuth');
 const S = require('../../utils/schemas');
-const { unauthorized, tooMany, badRequest } = require('../../utils/errors');
-const { encrypt, decrypt } = require('../../utils/crypto');
+const { ApiError, unauthorized, tooMany } = require('../../utils/errors');
 const { audit } = require('../../utils/audit');
+const { sha256, randomCode } = require('../../utils/tokens');
+const { sendAdminLoginCode } = require('../../utils/mailer');
 const { toSql, addMinutes, fromSql } = require('../../utils/time');
 
-authenticator.options = { window: 1 };   // accept the previous/next 30s code to allow small clock drift
-
 const router = express.Router();
-const MAX_FAILS = 5;
+const MAX_FAILS = 5;           // password / code failures before the account locks
 const LOCK_MIN = 15;
+const CODE_MINUTES = 10;       // emailed login code lifetime
+const MAX_CODE_TRIES = 5;      // wrong tries per code, then the admin must log in again
+const RESEND_SECONDS = 60;     // at most one resend per minute
+const MAX_RESENDS = 5;         // per login
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', config.bcryptRounds);
 
-const adminView = (a) => ({ id: a.id, email: a.email, name: a.name, role: a.role, totpEnabled: !!a.totp_enabled });
+const adminView = (a) => ({ id: a.id, email: a.email, name: a.name, role: a.role });
 
 async function registerFailure(req, admin, why) {
   const fails = admin.failed_attempts + 1;
@@ -31,7 +32,7 @@ async function registerFailure(req, admin, why) {
   } else {
     await query('UPDATE admins SET failed_attempts = ? WHERE id = ?', [fails, admin.id]);
   }
-  await audit(req, 'admin.login_failed', { admin, entityType: 'admin', entityId: admin.id, details: { why } });
+  if (why === 'bad_password') await audit(req, 'admin.login_failed', { admin, entityType: 'admin', entityId: admin.id, details: { why } });
 }
 
 function assertNotLocked(admin) {
@@ -39,13 +40,27 @@ function assertNotLocked(admin) {
   if (locked && locked > new Date()) throw tooMany('ADMIN_LOCKED', 'Too many failed attempts. Try again in 15 minutes.');
 }
 
-async function finishLogin(req, admin) {
-  await query('UPDATE admins SET failed_attempts = 0, locked_until = NULL, last_login_at = UTC_TIMESTAMP() WHERE id = ?', [admin.id]);
-  await audit(req, 'admin.login', { admin, entityType: 'admin', entityId: admin.id });
-  return { token: signAdminToken(admin), admin: adminView(admin) };
+/** Email the code. The code itself is never logged, stored in plain text or returned. */
+async function emailCode(req, admin, code, resend) {
+  try {
+    await sendAdminLoginCode(admin.email, code);
+  } catch (err) {
+    console.error('ADMIN LOGIN CODE EMAIL FAILED', err.message);
+    throw new ApiError(503, 'EMAIL_FAILED', 'We could not send the login code. Please try again.');
+  }
+  await audit(req, 'admin.login_code_sent', { admin, entityType: 'admin', entityId: admin.id, details: resend ? { resend: true } : null });
 }
 
-// Step 1: email + password. The result tells the panel which 2FA step comes next.
+/** The login challenge row for a challenge token; refuses used / locked ones. */
+async function openChallenge(challengeToken) {
+  const { admin, challengeId } = await loadChallenge(challengeToken);
+  const row = (await query('SELECT * FROM admin_login_codes WHERE id = ? AND admin_id = ?', [challengeId, admin.id]))[0];
+  if (!row || row.used_at) throw unauthorized('CHALLENGE_INVALID', 'This login has expired. Please log in again.');
+  if (row.attempts >= MAX_CODE_TRIES) throw tooMany('OTP_LOCKED', 'Too many wrong codes. Please log in again.');
+  return { admin, row };
+}
+
+// Step 1: email + password. Emails a 6-digit code and returns a single-use challenge token (no admin token yet).
 router.post('/login', adminLimiter, validate(z.object({ email: S.email, password: z.string().min(1).max(200) })), async (req, res) => {
   const admin = (await query('SELECT * FROM admins WHERE email = ?', [req.body.email]))[0];
   const ok = await bcrypt.compare(req.body.password, admin ? admin.password_hash : DUMMY_HASH);
@@ -53,42 +68,58 @@ router.post('/login', adminLimiter, validate(z.object({ email: S.email, password
   assertNotLocked(admin);
   if (!ok) { await registerFailure(req, admin, 'bad_password'); throw unauthorized('INVALID_CREDENTIALS', 'Email or password is incorrect'); }
 
-  const scope = admin.totp_enabled ? 'totp_verify' : 'totp_setup';
-  res.json({ step: scope, stepToken: signStepToken(admin, scope) });
+  // A new login cancels this admin's earlier unfinished ones; rows older than a day are removed.
+  await query('UPDATE admin_login_codes SET used_at = UTC_TIMESTAMP() WHERE admin_id = ? AND used_at IS NULL', [admin.id]);
+  await query('DELETE FROM admin_login_codes WHERE admin_id = ? AND created_at < UTC_TIMESTAMP() - INTERVAL 1 DAY', [admin.id]);
+  const code = randomCode();
+  const r = await query('INSERT INTO admin_login_codes (admin_id, code_hash, expires_at, last_sent_at) VALUES (?,?,?, UTC_TIMESTAMP())',
+    [admin.id, sha256(code), toSql(addMinutes(new Date(), CODE_MINUTES))]);
+  await emailCode(req, admin, code, false);
+  res.json({
+    step: 'email_otp', challengeToken: signChallengeToken(admin, r.insertId),
+    expiresInSeconds: CHALLENGE_MINUTES * 60, resendAfterSeconds: RESEND_SECONDS,
+  });
 });
 
-// Step 2a (first login): start authenticator enrolment. Returns the secret + QR code to scan.
-router.post('/totp/setup', adminLimiter, requireStep('totp_setup'), async (req, res) => {
-  const secret = authenticator.generateSecret();
-  await query('UPDATE admins SET totp_secret_enc = ?, totp_enabled = 0 WHERE id = ?', [encrypt(secret), req.admin.id]);
-  const otpauthUrl = authenticator.keyuri(req.admin.email, 'Satsang Spark Admin', secret);
-  res.json({ secret, otpauthUrl, qrDataUrl: await QRCode.toDataURL(otpauthUrl) });
-});
-
-// Step 2b: confirm enrolment with the first code; completes the login.
-router.post('/totp/enable', adminLimiter, requireStep('totp_setup'), validate(z.object({ code: S.code })), async (req, res) => {
-  const admin = req.admin;
+// Step 2: the emailed code. Correct → the admin token; the challenge is then used up.
+router.post('/verify-otp', adminOtpLimiter, validate(z.object({ challengeToken: z.string().min(1).max(2000), code: S.code })), async (req, res) => {
+  const { admin, row } = await openChallenge(req.body.challengeToken);
   assertNotLocked(admin);
-  if (!admin.totp_secret_enc) throw badRequest('TOTP_NOT_STARTED', 'Start 2FA setup first');
-  if (!authenticator.check(req.body.code, decrypt(admin.totp_secret_enc))) {
-    await registerFailure(req, admin, 'bad_totp');
-    throw unauthorized('TOTP_INVALID', 'That code is incorrect');
+  if (fromSql(row.expires_at) <= new Date()) throw unauthorized('OTP_EXPIRED', 'This code has expired. Request a new code or log in again.');
+
+  if (row.code_hash !== sha256(req.body.code)) {
+    const attemptsLeft = MAX_CODE_TRIES - (row.attempts + 1);
+    await query('UPDATE admin_login_codes SET attempts = attempts + 1 WHERE id = ?', [row.id]);
+    await registerFailure(req, admin, 'bad_code');
+    await audit(req, 'admin.login_code_failed', { admin, entityType: 'admin', entityId: admin.id, details: { attemptsLeft } });
+    if (attemptsLeft <= 0) throw tooMany('OTP_LOCKED', 'Too many wrong codes. Please log in again.');
+    throw new ApiError(401, 'OTP_INVALID', 'That code is incorrect.', { attemptsLeft });
   }
-  await query('UPDATE admins SET totp_enabled = 1 WHERE id = ?', [admin.id]);
-  admin.totp_enabled = 1;
-  await audit(req, 'admin.totp_enabled', { entityType: 'admin', entityId: admin.id });
-  res.json(await finishLogin(req, admin));
+
+  // Single use: only the request that flips used_at wins (protects against two parallel verifies).
+  const used = await query('UPDATE admin_login_codes SET used_at = UTC_TIMESTAMP() WHERE id = ? AND used_at IS NULL', [row.id]);
+  if (!used.affectedRows) throw unauthorized('CHALLENGE_INVALID', 'This login has expired. Please log in again.');
+  await query('UPDATE admins SET failed_attempts = 0, locked_until = NULL, last_login_at = UTC_TIMESTAMP() WHERE id = ?', [admin.id]);
+  await audit(req, 'admin.login_success', { admin, entityType: 'admin', entityId: admin.id });
+  res.json({ token: signAdminToken(admin), admin: adminView(admin) });
 });
 
-// Step 2 (normal logins): verify the 6-digit authenticator code.
-router.post('/totp/verify', adminLimiter, requireStep('totp_verify'), validate(z.object({ code: S.code })), async (req, res) => {
-  const admin = req.admin;
+// A new code for the same login (the previous code stops working). Once per minute, at most 5 times per login.
+router.post('/resend-otp', adminResendLimiter, validate(z.object({ challengeToken: z.string().min(1).max(2000) })), async (req, res) => {
+  const { admin, row } = await openChallenge(req.body.challengeToken);
   assertNotLocked(admin);
-  if (!authenticator.check(req.body.code, decrypt(admin.totp_secret_enc))) {
-    await registerFailure(req, admin, 'bad_totp');
-    throw unauthorized('TOTP_INVALID', 'That code is incorrect');
+  if (row.resend_count >= MAX_RESENDS) throw tooMany('RESEND_LIMIT', 'Too many new codes for this login. Please log in again.');
+  const waited = (Date.now() - fromSql(row.last_sent_at).getTime()) / 1000;
+  if (waited < RESEND_SECONDS) {
+    const retryAfterSeconds = Math.ceil(RESEND_SECONDS - waited);
+    throw new ApiError(429, 'RESEND_TOO_SOON', `Please wait ${retryAfterSeconds} seconds before asking for a new code.`, { retryAfterSeconds });
   }
-  res.json(await finishLogin(req, admin));
+  const code = randomCode();
+  await query(
+    'UPDATE admin_login_codes SET code_hash = ?, expires_at = ?, attempts = 0, resend_count = resend_count + 1, last_sent_at = UTC_TIMESTAMP() WHERE id = ? AND used_at IS NULL',
+    [sha256(code), toSql(addMinutes(new Date(), CODE_MINUTES)), row.id]);
+  await emailCode(req, admin, code, true);
+  res.json({ sent: true, expiresInSeconds: CODE_MINUTES * 60, resendAfterSeconds: RESEND_SECONDS, resendsLeft: MAX_RESENDS - (row.resend_count + 1) });
 });
 
 router.get('/me', requireAdmin, (req, res) => res.json({ admin: adminView(req.admin) }));

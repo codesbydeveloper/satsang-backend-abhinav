@@ -1,4 +1,4 @@
-// Create the first Full Admin (they set up 2FA on first login):
+// Create the first Full Admin (each login: password, then a 6-digit code emailed to them):
 //   npm run seed:admin -- you@example.org "Strong passphrase 12+ chars" "Your Name"
 const bcrypt = require('bcryptjs');
 const config = require('../src/config');
@@ -11,7 +11,7 @@ async function main() {
   const e = email.trim().toLowerCase();
   if ((await query('SELECT 1 FROM admins WHERE email = ?', [e])).length) { console.error('An admin with that email already exists.'); process.exit(1); }
   await query("INSERT INTO admins (email, name, password_hash, role) VALUES (?,?,?, 'full_admin')", [e, name, await bcrypt.hash(password, config.bcryptRounds)]);
-  console.log(`Created Full Admin ${e}. They will be asked to set up an authenticator app on first login.`);
+  console.log(`Created Full Admin ${e}. At login they enter their password, then the 6-digit code emailed to this address.`);
   await pool.end();
 }
 main().catch((e) => { console.error(e); process.exit(1); });

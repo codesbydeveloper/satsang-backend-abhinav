@@ -1,6 +1,6 @@
 # Satsang Spark — Backend API (Milestone 1)
 
-Node.js + Express REST API with MySQL, JWT auth, and the foundation for the Admin Panel (roles, TOTP 2FA, audit log).
+Node.js + Express REST API with MySQL, JWT auth, and the foundation for the Admin Panel (roles, emailed login code as the second step, audit log).
 
 **Milestone 1 scope covered here:** registration and login (email + password + email verification), password reset, adult and parent accounts, child profiles, 16 fixed avatars, DOB-based age groups, Parent PIN, parent daily-time report, account/profile deletion (including the external deletion-page endpoint), username moderation, and the admin foundation.
 
@@ -22,15 +22,15 @@ npm run migrate               # creates all tables (safe to re-run)
 npm run seed:admin -- you@example.org "a passphrase of 12+ characters" "Your Name"
 npm run dev                   # http://localhost:3000   (npm start for production)
 ```
-Generate the secrets with `openssl rand -hex 32` (use a different value for each of `JWT_SECRET`, `ADMIN_JWT_SECRET`, `ADMIN_TOTP_ENC_KEY`). In production the server refuses to start with the default secrets.
+Generate the secrets with `openssl rand -hex 32` (use a different value for `JWT_SECRET` and `ADMIN_JWT_SECRET`). In production the server refuses to start with the default secrets.
 
-The first Full Admin sets up an authenticator app (Google Authenticator, Authy, …) the first time they log in. They can then create other admins from the Admin Panel (or `POST /admin/admins`).
+Admins log in with their password and then a 6-digit code emailed to them, so SMTP must work in production (`MAIL_TRANSPORT=smtp`; with `console` the email, code included, is printed in the server console: development only). They can then create other admins from the Admin Panel (or `POST /admin/admins`).
 
 ## Tests
 ```bash
 cp .env.test.example .env.test   # a SEPARATE database whose name ends in _test (tests wipe its tables)
 NODE_ENV=test npm run migrate
-npm test                         # 116 tests: auth, profiles, Parent PIN, settings, deletion, admin roles/2FA/audit
+npm test                         # 127 tests: auth, profiles, Parent PIN, settings, deletion, admin roles/login code/audit
 ```
 On Windows use `set NODE_ENV=test&& npm run migrate` (cmd) or `$env:NODE_ENV="test"; npm run migrate` (PowerShell).
 
@@ -39,11 +39,11 @@ On Windows use `set NODE_ENV=test&& npm run migrate` (cmd) or `$env:NODE_ENV="te
 
 ## Project layout
 ```
-db/migrations/      SQL schema (001 accounts/profiles/admin, 002 activity, 003 deletion requests, 004 account dob, 005 heartbeat minutes, 006 sign-up name/gender + sign-up bonus, 007 profile country, … 012 deletion retained email). `npm run migrate` applies them in order.
+db/migrations/      SQL schema (001 accounts/profiles/admin, 002 activity, 003 deletion requests, 004 account dob, 005 heartbeat minutes, 006 sign-up name/gender + sign-up bonus, 007 profile country, … 012 deletion retained email, 013 UTC timestamps, 014 admin login codes). `npm run migrate` applies them in order.
 scripts/            migrate.js, seed-admin.js
 src/config.js       all settings from .env
 src/routes/         auth, account (/me), profiles, parent (PIN + report), public, admin/*
-src/middleware/     auth (users), adminAuth (roles, 2FA steps), validation, rate limits, errors
+src/middleware/     auth (users), adminAuth (roles, login challenge token), validation, rate limits, errors
 src/utils/          age groups, username filter, tokens/sessions, email codes, PIN lock, audit log
 src/openapi.js      the API documentation
 test/               automated tests
@@ -57,7 +57,7 @@ test/               automated tests
 - **Usernames:** 3–20 characters, letters in any script (Gujarati works), digits, `_` and `.`; unique ignoring case; checked against the admin-managed blocked/reserved list with look-alike handling (`sh1t` ≈ `shit`).
 - **Account deletion:** in the app, `DELETE /me` (password) deletes at once, in one transaction, and records a completed row (source `app`) in the deletion history. The public web page (`POST /public/delete-account`) files a request (202) that a Full Admin approves (the account is deleted) or rejects with a reason in Admin → Deletion requests. Every path uses `deleteAccountCompletely` (`src/utils/accountDeletion.js`). The owner is emailed a deletion confirmation (a parent account: the parent's email); a mail failure is logged and never stops the deletion. History rows keep no username; the email is kept on the request row only for `RETAINED_EMAIL_DAYS` (default 30, client approved 19 Nov 2026), shown to Full Admins only, then erased by the purge job (server start, every 24 hours, and `npm run purge:retained-emails` for a cron job). A parent deletes one child with the Parent PIN (`DELETE /profiles/:id`, parent area); devices playing as that child are logged out.
 - **Deletion:** database foreign keys cascade, so deleting a profile or account removes everything attached to it, now and for tables added in later milestones (new profile-owned tables must use `ON DELETE CASCADE` on `profile_id`).
-- **Admin login:** password → authenticator code → admin token (8 h). A step token can only be used for the 2FA calls. Five failures lock the admin for 15 minutes. Every admin action is written to `audit_log` (read-only through the API).
+- **Admin login (email code, client approved 20 Nov 2026):** `POST /admin/auth/login` (email + password) emails a 6-digit code (valid 10 minutes; only its SHA-256 hash is stored in `admin_login_codes`) and returns a single-use 10-minute `challengeToken`; `POST /admin/auth/verify-otp` with the token + code returns the admin token (8 h). 5 wrong tries end that login (log in again); `POST /admin/auth/resend-otp` sends a new code (old one stops working) at most once per 60 s and 5 times per login. A new login cancels an unfinished one. Five failures (password or code) lock the admin for 15 minutes. The code is never logged or returned; the audit log has `admin.login_code_sent`, `admin.login_code_failed`, `admin.login_success`. The old authenticator (TOTP) columns stay in `admins` unused, and `ADMIN_TOTP_ENC_KEY` is no longer needed. Every admin action is written to `audit_log` (read-only through the API).
 
 ## Decisions made while building — please confirm with Loyadham
 | Topic | What the code does now | Change at |

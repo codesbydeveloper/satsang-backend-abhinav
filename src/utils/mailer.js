@@ -34,6 +34,13 @@ const sendVerificationCode = (to, code) =>
 const sendPasswordResetCode = (to, code) =>
   sendMail({ to, subject: 'Reset your Satsang Spark password', text: codeText('We received a request to reset your password.', code) });
 
+/** Admin Panel login code (second login step). Fixed text + the code only: no other data. */
+const sendAdminLoginCode = (to, code) => sendMail({
+  to,
+  subject: 'Your Satsang Spark admin login code',
+  text: `Your login code is ${code}. It expires in 10 minutes. If you didn't try to log in, change your password.`,
+});
+
 const DELETED_BODY = 'Your account has been successfully removed. Everything linked to it has been deleted and you have been logged out on every device. Thank you for being part of Satsang Spark.';
 /** Sent when an account deletion completes. Greeting + fixed text only: no other personal data. */
 const sendAccountDeletedEmail = (to) => sendMail({
@@ -46,5 +53,5 @@ ${DELETED_BODY}
   html: `<p>Hello,</p><p>${DELETED_BODY}</p>`,
 });
 
-const mailer = { sendMail, sendVerificationCode, sendPasswordResetCode, sendAccountDeletedEmail, outbox };
+const mailer = { sendMail, sendVerificationCode, sendPasswordResetCode, sendAdminLoginCode, sendAccountDeletedEmail, outbox };
 module.exports = mailer;

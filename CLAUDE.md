@@ -21,7 +21,7 @@
 - **Age groups:** Shishu 0–4; Bals/Balikas A 5–7, B 8–9, C 10–12; Kishors/Kishoris A 13–15, B 16–18; Yuvak/Yuvatis A 19–35; Yuvaks/Yuvatis B 36–55; Vadil 56+. DOB is private; only the username is public.
 - **Server is authoritative:** Sparks, purchases, streaks, spin, referrals, leaderboards. Game day = America/New_York (DST-aware); Daily Spin = rolling 24 h. The app must work offline (questions/answers cached encrypted, scores re-verified on sync, unique transaction IDs).
 - **Privacy/COPPA/store compliance** is built in from the start; privacy-policy and consent wording come from Loyadham's counsel. Account deletion must be possible in-app and via an external web page.
-- **Admin Panel:** roles Full Admin and Content Editor, TOTP 2FA, audit log.
+- **Admin Panel:** roles Full Admin and Content Editor, 2FA, audit log. (2FA is an emailed 6-digit login code since 20 Nov 2026, client approved; it replaced TOTP.)
 - **Avatars:** 16 fixed (10 animal, 6 human). "Customize Profile Avatar" is Coming Soon (never "Mascot").
 - **No hidden access:** no undisclosed admin accounts, backdoors, hard-coded credentials or tracking.
 - Any paid dependency is included in the $5,000, except the Block Blast Toolkit ($24.99, reimbursed).

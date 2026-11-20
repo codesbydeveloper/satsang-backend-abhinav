@@ -12,7 +12,7 @@ const { audit } = require('../../utils/audit');
 const router = express.Router();
 router.use(requireAdmin, requireRole('full_admin'));
 
-const view = (a) => ({ id: a.id, email: a.email, name: a.name, role: a.role, isActive: !!a.is_active, totpEnabled: !!a.totp_enabled, lastLoginAt: a.last_login_at, createdAt: a.created_at });
+const view = (a) => ({ id: a.id, email: a.email, name: a.name, role: a.role, isActive: !!a.is_active,lastLoginAt: a.last_login_at, createdAt: a.created_at });
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 const ROLES = z.enum(['full_admin', 'content_editor']);
 
@@ -53,14 +53,6 @@ router.patch('/:id', validate(idParam, 'params'), validate(z.object({ name: z.st
   if (sets.length) await query(`UPDATE admins SET ${sets.join(', ')} WHERE id = ?`, [...vals, a.id]);
   await audit(req, 'admin.updated', { entityType: 'admin', entityId: a.id, details: { name, role, isActive } });
   res.json({ admin: view((await query('SELECT * FROM admins WHERE id = ?', [a.id]))[0]) });
-});
-
-// Lost phone: remove 2FA so the admin enrols a new authenticator at next login.
-router.post('/:id/reset-2fa', validate(idParam, 'params'), async (req, res) => {
-  const a = await target(req);
-  await query('UPDATE admins SET totp_secret_enc = NULL, totp_enabled = 0, token_version = token_version + 1 WHERE id = ?', [a.id]);
-  await audit(req, 'admin.2fa_reset', { entityType: 'admin', entityId: a.id });
-  res.json({ ok: true });
 });
 
 router.post('/:id/reset-password', validate(idParam, 'params'), validate(z.object({ newPassword: z.string().min(12).max(72) })), async (req, res) => {

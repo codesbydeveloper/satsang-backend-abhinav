@@ -15,7 +15,6 @@ const config = {
   },
   jwtSecret: process.env.JWT_SECRET || 'dev-user-secret-change-me',
   adminJwtSecret: process.env.ADMIN_JWT_SECRET || 'dev-admin-secret-change-me',
-  adminTotpKey: process.env.ADMIN_TOTP_ENC_KEY || '0'.repeat(64),
   accessTokenTtl: process.env.ACCESS_TOKEN_TTL || '1h',
   refreshTokenDays: Number(process.env.REFRESH_TOKEN_DAYS || 60),
   adminTokenTtl: process.env.ADMIN_TOKEN_TTL || '8h',
@@ -42,7 +41,6 @@ if (config.env === 'production') {
   const weak = [];
   if (config.jwtSecret.startsWith('dev-')) weak.push('JWT_SECRET');
   if (config.adminJwtSecret.startsWith('dev-')) weak.push('ADMIN_JWT_SECRET');
-  if (/^0+$/.test(config.adminTotpKey)) weak.push('ADMIN_TOTP_ENC_KEY');
   if (weak.length) throw new Error(`Refusing to start in production with default secrets: ${weak.join(', ')}`);
 }
 

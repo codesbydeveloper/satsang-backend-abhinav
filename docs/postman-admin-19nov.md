@@ -1,8 +1,8 @@
-# Admin changes 19 Nov 2026: curl / Postman steps (deletion confirmation email, 30-day retained email)
+# Admin changes 19 Nov 2026: curl / Postman steps (deletion confirmation email, 30-day retained email, email login code)
 
 Base URL `http://localhost:3000/api/v1` (start the server with `npm run dev`; with `MAIL_TRANSPORT=console` every
 email is printed in the server console). In Postman: *Import → Raw text* and paste any command below.
-Run `npm run migrate` first (migration 012 retained email). New setting: `RETAINED_EMAIL_DAYS` (default `30`).
+Run `npm run migrate` first (migration 012 retained email, 014 admin login codes). New setting: `RETAINED_EMAIL_DAYS` (default `30`).
 
 What changed (client approved):
 - When an account deletion completes (in the app, or a Full Admin approves a web-page request, or deletes from the
@@ -67,3 +67,45 @@ npm run purge:retained-emails
 Expected: `Erased 1 retained email(s).`; the row's `email_retained` is now `NULL`, and the audit log has one
 `retained_emails.purged` entry with `details: { "count": 1 }` (no emails). A run that erases nothing writes no entry.
 On cPanel, add a daily cron job: `cd <app folder> && npm run purge:retained-emails`.
+
+## 7. Admin login with an emailed code (20 Nov 2026, client approved)
+The authenticator app is gone: `/admin/auth/totp/setup`, `/totp/enable`, `/totp/verify` and
+`/admin/admins/{id}/reset-2fa` now return 404, and `totpEnabled` is no longer in admin responses.
+`ADMIN_TOTP_ENC_KEY` is not needed any more. Create a first admin with
+`npm run seed:admin -- you@example.org "a passphrase of 12+ characters" "Your Name"`.
+
+**Step 1: password**
+```bash
+curl -s -X POST http://localhost:3000/api/v1/admin/auth/login -H "Content-Type: application/json" -d '{
+  "email": "you@example.org", "password": "a passphrase of 12+ characters" }'
+```
+Expected: `200 { "step": "email_otp", "challengeToken": "<challengeToken>", "expiresInSeconds": 600, "resendAfterSeconds": 60 }`
+(no admin token yet). The server console shows `[mail:console] to=you@example.org subject="Your Satsang Spark admin login code"`
+with the text "Your login code is 123456. It expires in 10 minutes. If you didn't try to log in, change your password."
+Wrong email or wrong password: `401 INVALID_CREDENTIALS` "Email or password is incorrect" (the same for both).
+
+**Step 2: the code**
+```bash
+curl -s -X POST http://localhost:3000/api/v1/admin/auth/verify-otp -H "Content-Type: application/json" -d '{
+  "challengeToken": "<challengeToken>", "code": "123456" }'
+```
+Expected: `200 { "token": "<adminToken>", "admin": { "id", "email", "name", "role" } }`. Use
+`Authorization: Bearer <adminToken>` on every other admin call. The same challenge token cannot be used again
+(`401 CHALLENGE_INVALID`).
+- Wrong code: `401 OTP_INVALID` with `details.attemptsLeft` (4, 3, 2, 1). The 5th wrong code: `429 OTP_LOCKED`
+  "Too many wrong codes. Please log in again." (the account is also locked for 15 minutes: `429 ADMIN_LOCKED`).
+- Code older than 10 minutes: `401 OTP_EXPIRED` "This code has expired. Request a new code or log in again."
+- Challenge token older than 10 minutes, or replaced by a newer login: `401 CHALLENGE_INVALID` (log in again).
+
+**New code**
+```bash
+curl -s -X POST http://localhost:3000/api/v1/admin/auth/resend-otp -H "Content-Type: application/json" -d '{
+  "challengeToken": "<challengeToken>" }'
+```
+Expected: `200 { "sent": true, "expiresInSeconds": 600, "resendAfterSeconds": 60, "resendsLeft": 4 }` and a new
+email; the previous code stops working. Within 60 seconds of the last email: `429 RESEND_TOO_SOON` with
+`details.retryAfterSeconds`. After 5 resends for one login: `429 RESEND_LIMIT` (log in again).
+
+Audit log (Full Admin, `GET /admin/audit-log`): `admin.login_code_sent` (`details.resend: true` for a resend),
+`admin.login_code_failed` (`details.attemptsLeft`), `admin.login_success`; wrong passwords stay
+`admin.login_failed`, a lock is `admin.locked`. No code is ever in the log or in a response.
