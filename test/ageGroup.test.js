@@ -25,3 +25,18 @@ test('DOB validation', () => {
   assert.equal(isValidDob('not-a-date'), false);
   assert.equal(isValidDob('2000-02-29'), true);
 });
+
+test('labels: same names as the app en.json; both Yuvak groups read "Yuvaks/Yuvatis"', () => {
+  const { AGE_GROUPS, ageGroupLabel } = require('../src/utils/ageGroup');
+  assert.equal(ageGroupLabel('Yuvak/Yuvatis A'), 'Yuvaks/Yuvatis A');
+  assert.equal(ageGroupLabel('Yuvaks/Yuvatis B'), 'Yuvaks/Yuvatis B');
+  assert.equal(ageGroupLabel(null), null);
+  assert.equal(ageGroupLabel('Unknown'), 'Unknown');
+  assert.equal(AGE_GROUPS.length, 9);
+  const fs = require('node:fs'); const path = require('node:path');
+  const en = path.join(__dirname, '../../satsang-app-abhinav/Assets/_Project/Localization/en.json');
+  if (!fs.existsSync(en)) return;   // the app repo is not checked out next to this one (CI)
+  const strings = JSON.parse(fs.readFileSync(en, 'utf8'));
+  const appLabels = Object.entries(strings).filter(([k]) => k.startsWith('age_group.')).map(([, v]) => v);
+  assert.deepEqual(AGE_GROUPS.map((g) => g.label), appLabels);
+});

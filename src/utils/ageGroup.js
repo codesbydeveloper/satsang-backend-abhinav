@@ -1,16 +1,21 @@
-// Age categories exactly as defined in contract Section 3.3.
+// Age categories as defined in contract Section 3.3. The single list for the backend.
+// key   = the value stored in profiles.age_group and sent in the API (never changes: the app and old data use it).
+// label = what people read; the same as the app's en.json (age_group.*). The key "Yuvak/Yuvatis A" is labelled
+//         "Yuvaks/Yuvatis A" so both Yuvak groups read the same (client choice, 20 Nov 2026).
 const AGE_GROUPS = [
-  { key: 'Shishu',              min: 0,  max: 4 },
-  { key: 'Bals/Balikas A',      min: 5,  max: 7 },
-  { key: 'Bals/Balikas B',      min: 8,  max: 9 },
-  { key: 'Bals/Balikas C',      min: 10, max: 12 },
-  { key: 'Kishors/Kishoris A',  min: 13, max: 15 },
-  { key: 'Kishors/Kishoris B',  min: 16, max: 18 },
-  { key: 'Yuvak/Yuvatis A',     min: 19, max: 35 },
-  { key: 'Yuvaks/Yuvatis B',    min: 36, max: 55 },
-  { key: 'Vadil',               min: 56, max: 200 },
+  { key: 'Shishu',              label: 'Shishu',             min: 0,  max: 4 },
+  { key: 'Bals/Balikas A',      label: 'Bals/Balikas A',     min: 5,  max: 7 },
+  { key: 'Bals/Balikas B',      label: 'Bals/Balikas B',     min: 8,  max: 9 },
+  { key: 'Bals/Balikas C',      label: 'Bals/Balikas C',     min: 10, max: 12 },
+  { key: 'Kishors/Kishoris A',  label: 'Kishors/Kishoris A', min: 13, max: 15 },
+  { key: 'Kishors/Kishoris B',  label: 'Kishors/Kishoris B', min: 16, max: 18 },
+  { key: 'Yuvak/Yuvatis A',     label: 'Yuvaks/Yuvatis A',   min: 19, max: 35 },
+  { key: 'Yuvaks/Yuvatis B',    label: 'Yuvaks/Yuvatis B',   min: 36, max: 55 },
+  { key: 'Vadil',               label: 'Vadil',              min: 56, max: 200 },
 ];
 const AGE_GROUP_KEYS = AGE_GROUPS.map((g) => g.key);
+/** Display label for a stored key (null stays null; an unknown key is shown as is). */
+const ageGroupLabel = (key) => (key == null ? null : (AGE_GROUPS.find((g) => g.key === key)?.label ?? key));
 
 const { etDate } = require('./time');
 
@@ -41,4 +46,4 @@ function isValidDob(dob, onDate = etDate()) {
   return dob <= onDate && y >= 1900;
 }
 
-module.exports = { AGE_GROUPS, AGE_GROUP_KEYS, ageOn, ageGroupForAge, ageGroupForDob, isValidDob };
+module.exports = { AGE_GROUPS, AGE_GROUP_KEYS, ageGroupLabel, ageOn, ageGroupForAge, ageGroupForDob, isValidDob };

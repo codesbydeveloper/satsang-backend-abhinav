@@ -20,7 +20,7 @@ router.get('/meta/config', (_req, res) => {
   res.json({
     minAppVersion: config.minAppVersion, privacyPolicyVersion: config.privacyPolicyVersion,
     parentalConsentAge: config.parentalConsentAge, languages: ['en', 'gu'], modes: ['sanatan', 'satsang'],
-    ageGroups: AGE_GROUPS.map((g) => ({ key: g.key, minAge: g.min, maxAge: g.max })),
+    ageGroups: AGE_GROUPS.map((g) => ({ key: g.key, label: g.label, minAge: g.min, maxAge: g.max })),
     serverTimeUtc: now.toISOString(), gameDay: etDate(now), gameTimeZone: TZ,
   });
 });

@@ -18,9 +18,13 @@ test('dashboard returns live counts, chart, recent sign-ups and admin activity',
   const r = await api().get('/api/v1/admin/dashboard').set(bearer(token));
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const b = r.body;
-  assert.deepEqual(b.totals, { accounts: 2, adultAccounts: 1, parentAccounts: 1, profiles: 2, childProfiles: 1, newRegistrationsToday: 2 });
+  assert.deepEqual(b.totals, { accounts: 2, adultAccounts: 1, parentAccounts: 1, profiles: 2, childProfiles: 1, newRegistrationsToday: 2, pendingDeletions: 0 });
+  assert.equal(b.timeZone, 'Asia/Kolkata', 'default DASHBOARD_TIMEZONE');
   assert.equal(b.ageGroups.length, 9);
-  assert.equal(b.ageGroups.find((g) => g.ageGroup === 'Yuvak/Yuvatis A').count, 1);
+  const yuvakA = b.ageGroups.find((g) => g.ageGroup === 'Yuvak/Yuvatis A');
+  assert.deepEqual(yuvakA, { ageGroup: 'Yuvak/Yuvatis A', label: 'Yuvaks/Yuvatis A', count: 1 }, 'stored key stays, label is consistent');
+  assert.equal(b.recentRegistrations.find((x) => x.type === 'adult').ageGroupLabel, 'Yuvaks/Yuvatis A');
+  assert.equal(b.recentRegistrations.find((x) => x.type === 'parent').ageGroupLabel, null);
   assert.equal(b.ageGroups.find((g) => g.ageGroup === 'Bals/Balikas B').count, 1);
   assert.equal(b.registrations.series.length, 7);
   assert.equal(b.registrations.total, 2);
@@ -42,4 +46,19 @@ test('dashboard is Full Admin only', async () => {
   const e = await h.adminLogin(ed);
   assert.equal((await api().get('/api/v1/admin/dashboard').set(bearer(e.token))).status, 403);
   assert.equal((await api().get('/api/v1/admin/dashboard')).status, 401);
+});
+
+test('dashboard counts pending deletion requests only', async () => {
+  const { token } = await h.adminLogin(await h.makeAdmin('boss@example.org'));
+  await h.adultLogin('ravi@example.org', 'ravi_k');
+  await h.adultLogin('mira@example.org', 'mira_m');
+  for (const email of ['ravi@example.org', 'mira@example.org']) {
+    assert.equal((await api().post('/api/v1/public/delete-account').send({ email, password: 'Secret123', confirm: true })).status, 202);
+  }
+  const count = async () => (await api().get('/api/v1/admin/dashboard').set(bearer(token))).body.totals.pendingDeletions;
+  assert.equal(await count(), 2);
+  const [first] = await h.query("SELECT id FROM account_deletion_requests WHERE status = 'pending' ORDER BY id LIMIT 1");
+  const rej = await api().post(`/api/v1/admin/deletion-requests/${first.id}/reject`).set(bearer(token)).send({ reason: 'Not the owner' });
+  assert.equal(rej.status, 200, JSON.stringify(rej.body));
+  assert.equal(await count(), 1, 'a rejected request is no longer pending');
 });

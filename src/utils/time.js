@@ -30,9 +30,11 @@ function jsonTimestamps(key, value) {
 function addMinutes(d, m) { return new Date(d.getTime() + m * 60000); }
 function addDays(d, n) { return new Date(d.getTime() + n * 86400000); }
 
-/** Calendar date (YYYY-MM-DD) of an instant in Eastern Time — the "game day". */
-function etDate(d = new Date()) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+/** Calendar date (YYYY-MM-DD) of an instant in the given IANA time zone. */
+function dateIn(timeZone, d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
 }
+/** Calendar date (YYYY-MM-DD) of an instant in Eastern Time — the "game day". */
+const etDate = (d = new Date()) => dateIn(TZ, d);
 
-module.exports = { TZ, nowUtc, toSql, fromSql, toIso, jsonTimestamps, addMinutes, addDays, etDate };
+module.exports = { TZ, nowUtc, toSql, fromSql, toIso, jsonTimestamps, addMinutes, addDays, etDate, dateIn };

@@ -321,7 +321,7 @@ module.exports = {
     },
     '/admin/blocked-words/{id}': { delete: op('Admin Moderation', 'Remove a word', { security: admin, parameters: [idParam], responses: { 200: ok('Removed'), ...errors(401, 403, 404) } }) },
 
-    '/admin/dashboard': { get: op('Admin Dashboard', 'Live numbers for the Admin Panel home page (Full Admin). "Today" and chart days are America/New_York calendar days. No emails or DOBs are returned.', {
+    '/admin/dashboard': { get: op('Admin Dashboard', 'Live numbers for the Admin Panel home page (Full Admin). "Today" and chart days are calendar days in DASHBOARD_TIMEZONE (default Asia/Kolkata; returned as timeZone). pendingDeletions = deletion requests with status pending. ageGroup is the stored key; label is the display name (same as the app en.json). No emails or DOBs are returned.', {
       security: admin,
       parameters: [
         { name: 'days', in: 'query', schema: int({ enum: [7, 30], default: 7 }), description: 'New-registrations chart range' },
@@ -329,13 +329,13 @@ module.exports = {
         { name: 'activity', in: 'query', schema: int({ minimum: 1, maximum: 50, default: 10 }), description: 'Rows in Recent admin activity' },
       ],
       responses: { 200: ok('Dashboard', obj({
-        generatedAt: str({ format: 'date-time' }), timeZone: str({ example: 'America/New_York' }),
-        totals: obj({ accounts: int(), adultAccounts: int(), parentAccounts: int(), profiles: int(), childProfiles: int(), newRegistrationsToday: int() }),
-        ageGroups: { type: 'array', items: obj({ ageGroup: ref('AgeGroup'), count: int() }) },
+        generatedAt: str({ format: 'date-time' }), timeZone: str({ example: 'Asia/Kolkata', description: 'DASHBOARD_TIMEZONE' }),
+        totals: obj({ accounts: int(), adultAccounts: int(), parentAccounts: int(), profiles: int(), childProfiles: int(), newRegistrationsToday: int(), pendingDeletions: int() }),
+        ageGroups: { type: 'array', items: obj({ ageGroup: ref('AgeGroup'), label: str({ example: 'Yuvaks/Yuvatis A' }), count: int() }) },
         registrations: obj({ days: int(), total: int(), series: { type: 'array', items: obj({ date: str({ format: 'date' }), count: int() }) } }),
         modes: { type: 'array', items: obj({ key: str({ enum: ['sanatan', 'satsang', 'not_set'] }), count: int() }) },
         languages: { type: 'array', items: obj({ key: str({ enum: ['en', 'gu'] }), count: int() }) },
-        recentRegistrations: { type: 'array', items: obj({ accountId: int(), profileId: int({ nullable: true }), type: str({ enum: ['adult', 'parent', 'child'] }), username: str({ nullable: true }), ageGroup: str({ nullable: true }), createdAt: str({ description: 'UTC' }) }) },
+        recentRegistrations: { type: 'array', items: obj({ accountId: int(), profileId: int({ nullable: true }), type: str({ enum: ['adult', 'parent', 'child'] }), username: str({ nullable: true }), ageGroup: str({ nullable: true }), ageGroupLabel: str({ nullable: true }), createdAt: str({ description: 'UTC' }) }) },
         recentAdminActivity: { type: 'array', items: obj({ id: int(), adminId: int({ nullable: true }), adminName: str({ nullable: true }), adminEmail: str({ nullable: true }), action: str(), entityType: str({ nullable: true }), entityId: str({ nullable: true }), details: { type: 'object', nullable: true }, createdAt: str({ description: 'UTC' }) }) },
       })), ...errors(400, 401, 403) } }) },
 

@@ -22,6 +22,9 @@ const config = {
   adminTokenTtl: process.env.ADMIN_TOKEN_TTL || '8h',
   // How long a deleted account's email stays on its deletion request (Full Admins only), then it is erased.
   retainedEmailDays: Number(process.env.RETAINED_EMAIL_DAYS || 30),
+  // Time zone for the Admin Panel dashboard ("new registrations today" and the chart days). IANA name.
+  // Not the game day: streaks, daily challenges and leaderboards stay on America/New_York (utils/time.js).
+  dashboardTimeZone: (process.env.DASHBOARD_TIMEZONE || 'Asia/Kolkata').trim(),
   mail: {
     transport: process.env.MAIL_TRANSPORT || 'console',
     from: process.env.MAIL_FROM || 'Satsang Spark <no-reply@example.org>',
@@ -38,6 +41,10 @@ const config = {
   // Temporary debugging switch: show the real error message in 500 responses even in production.
   exposeErrors: bool(process.env.EXPOSE_ERRORS),
 };
+
+try { new Intl.DateTimeFormat('en', { timeZone: config.dashboardTimeZone }); } catch {
+  throw new Error(`DASHBOARD_TIMEZONE "${config.dashboardTimeZone}" is not a valid IANA time zone (e.g. Asia/Kolkata)`);
+}
 
 if (config.env === 'production') {
   const weak = [];

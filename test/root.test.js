@@ -32,3 +32,12 @@ test('GET / never includes config values', async () => {
     if (v) assert.ok(!text.includes(v), `response leaks ${v}`);
   }
 });
+
+test('DASHBOARD_TIMEZONE: default Asia/Kolkata, an invalid zone stops the server from starting', () => {
+  const { execFileSync } = require('node:child_process');
+  const run = (tz) => execFileSync(process.execPath, ['-e', "console.log(require('./src/config').dashboardTimeZone)"],
+    { cwd: require('node:path').join(__dirname, '..'), env: { ...process.env, DASHBOARD_TIMEZONE: tz }, encoding: 'utf8', stdio: 'pipe' }).trim();
+  assert.equal(run(''), 'Asia/Kolkata');
+  assert.equal(run('America/New_York'), 'America/New_York');
+  assert.throws(() => run('Mars/Base'), /not a valid IANA time zone/);
+});
