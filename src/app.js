@@ -10,6 +10,13 @@ const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const openapi = require('./openapi');
 const { jsonTimestamps } = require('./utils/time');
 
+// Access log = morgan "combined", but admin invite tokens never reach the log (path /admin/auth/invite/<token>, or a
+// ?token= in the referrer when the Admin Panel's accept-invite page calls the API).
+const redact = (s) => String(s || '').replace(/(\/admin\/auth\/invite\/)[^/?#]+/g, '$1[redacted]').replace(/([?&]token=)[^&#]*/g, '$1[redacted]');
+morgan.token('safe-url', (req) => redact(req.originalUrl || req.url));
+morgan.token('safe-referrer', (req) => redact(req.get('referer') || req.get('referrer')) || '-');
+const SAFE_COMBINED = ':remote-addr - :remote-user [:date[clf]] ":method :safe-url HTTP/:http-version" :status :res[content-length] ":safe-referrer" ":user-agent"';
+
 function createApp() {
   const app = express();
   app.set('trust proxy', 1);                       // behind Hostinger's reverse proxy: use the real client IP
@@ -17,7 +24,7 @@ function createApp() {
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(cors({ origin: config.corsOrigins.length ? config.corsOrigins : false, credentials: false }));
   app.use(express.json({ limit: '100kb' }));
-  if (config.env !== 'test') app.use(morgan('combined'));
+  if (config.env !== 'test') app.use(morgan(SAFE_COMBINED));
   app.use(generalLimiter);
 
   // Root status check: no config values or error details, only whether the DB answers.

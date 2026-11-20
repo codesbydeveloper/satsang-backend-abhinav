@@ -5,6 +5,8 @@ const bool = (v, d = false) => (v === undefined ? d : String(v).toLowerCase() ==
 const config = {
   env: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 3000),
+  // Admin Panel base URL for invite links. Required (https) in production.
+  adminPanelUrl: (process.env.ADMIN_PANEL_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).trim().replace(/\/+$/, ''),
   corsOrigins: (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
@@ -42,6 +44,9 @@ if (config.env === 'production') {
   if (config.jwtSecret.startsWith('dev-')) weak.push('JWT_SECRET');
   if (config.adminJwtSecret.startsWith('dev-')) weak.push('ADMIN_JWT_SECRET');
   if (weak.length) throw new Error(`Refusing to start in production with default secrets: ${weak.join(', ')}`);
+  let panel = null;
+  try { panel = new URL(config.adminPanelUrl); } catch { /* missing or invalid */ }
+  if (!panel || panel.protocol !== 'https:') throw new Error('Refusing to start in production: ADMIN_PANEL_URL must be set to the Admin Panel https:// address');
 }
 
 module.exports = config;

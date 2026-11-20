@@ -26,11 +26,13 @@ Generate the secrets with `openssl rand -hex 32` (use a different value for `JWT
 
 Admins log in with their password and then a 6-digit code emailed to them, so SMTP must work in production (`MAIL_TRANSPORT=smtp`; with `console` the email, code included, is printed in the server console: development only). They can then create other admins from the Admin Panel (or `POST /admin/admins`).
 
+`npm run seed:admin` is only for the very first Full Admin (or an emergency). Every other admin is invited from the Admin Panel (`POST /admin/admins`): they get an email with a link to `<ADMIN_PANEL_URL>/accept-invite?token=…`, choose a password there, then log in normally. Set `ADMIN_PANEL_URL` to the panel address (`http://localhost:5173` locally); in production the server refuses to start unless it is an `https://` URL.
+
 ## Tests
 ```bash
 cp .env.test.example .env.test   # a SEPARATE database whose name ends in _test (tests wipe its tables)
 NODE_ENV=test npm run migrate
-npm test                         # 127 tests: auth, profiles, Parent PIN, settings, deletion, admin roles/login code/audit
+npm test                         # 137 tests: auth, profiles, Parent PIN, settings, deletion, admin roles/invites/login code/audit
 ```
 On Windows use `set NODE_ENV=test&& npm run migrate` (cmd) or `$env:NODE_ENV="test"; npm run migrate` (PowerShell).
 
@@ -39,7 +41,7 @@ On Windows use `set NODE_ENV=test&& npm run migrate` (cmd) or `$env:NODE_ENV="te
 
 ## Project layout
 ```
-db/migrations/      SQL schema (001 accounts/profiles/admin, 002 activity, 003 deletion requests, 004 account dob, 005 heartbeat minutes, 006 sign-up name/gender + sign-up bonus, 007 profile country, … 012 deletion retained email, 013 UTC timestamps, 014 admin login codes). `npm run migrate` applies them in order.
+db/migrations/      SQL schema (001 accounts/profiles/admin, 002 activity, 003 deletion requests, 004 account dob, 005 heartbeat minutes, 006 sign-up name/gender + sign-up bonus, 007 profile country, … 012 deletion retained email, 013 UTC timestamps, 014 admin login codes, 015 admin invites). `npm run migrate` applies them in order.
 scripts/            migrate.js, seed-admin.js
 src/config.js       all settings from .env
 src/routes/         auth, account (/me), profiles, parent (PIN + report), public, admin/*
@@ -58,6 +60,7 @@ test/               automated tests
 - **Account deletion:** in the app, `DELETE /me` (password) deletes at once, in one transaction, and records a completed row (source `app`) in the deletion history. The public web page (`POST /public/delete-account`) files a request (202) that a Full Admin approves (the account is deleted) or rejects with a reason in Admin → Deletion requests. Every path uses `deleteAccountCompletely` (`src/utils/accountDeletion.js`). The owner is emailed a deletion confirmation (a parent account: the parent's email); a mail failure is logged and never stops the deletion. History rows keep no username; the email is kept on the request row only for `RETAINED_EMAIL_DAYS` (default 30, client approved 19 Nov 2026), shown to Full Admins only, then erased by the purge job (server start, every 24 hours, and `npm run purge:retained-emails` for a cron job). A parent deletes one child with the Parent PIN (`DELETE /profiles/:id`, parent area); devices playing as that child are logged out.
 - **Deletion:** database foreign keys cascade, so deleting a profile or account removes everything attached to it, now and for tables added in later milestones (new profile-owned tables must use `ON DELETE CASCADE` on `profile_id`).
 - **Admin login (email code, client approved 20 Nov 2026):** `POST /admin/auth/login` (email + password) emails a 6-digit code (valid 10 minutes; only its SHA-256 hash is stored in `admin_login_codes`) and returns a single-use 10-minute `challengeToken`; `POST /admin/auth/verify-otp` with the token + code returns the admin token (8 h). 5 wrong tries end that login (log in again); `POST /admin/auth/resend-otp` sends a new code (old one stops working) at most once per 60 s and 5 times per login. A new login cancels an unfinished one. Five failures (password or code) lock the admin for 15 minutes. The code is never logged or returned; the audit log has `admin.login_code_sent`, `admin.login_code_failed`, `admin.login_success`. The old authenticator (TOTP) columns stay in `admins` unused, and `ADMIN_TOTP_ENC_KEY` is no longer needed. Every admin action is written to `audit_log` (read-only through the API).
+- **Admin invites (client approved 20 Nov 2026):** a Full Admin invites with `POST /admin/admins` `{ email, name, role }`. The admin is created as `invited` (no password, `is_active = 0`) with a random 48-hour token (only its SHA-256 hash is stored, `admins.invite_token_hash`) and is emailed the link. The public `GET /admin/auth/invite/:token` (404 `INVITE_INVALID` / 410 `INVITE_EXPIRED`) and `POST /admin/auth/accept-invite` `{ token, password }` (bcrypt, 12–72 chars; the link then stops working) are rate limited. Full Admins can resend (`/admins/:id/resend-invite`, old link stops working), cancel (`DELETE /admins/:id`, invited only), change role and deactivate / reactivate (`PATCH /admins/:id` `{ role?, active? }`; not yourself; at least one active Full Admin always remains: 409 `LAST_FULL_ADMIN`). `GET /admin/admins` returns `status` (`active` | `invited` | `inactive`) and `inviteExpiresAt`. Deactivated admins cannot log in and their tokens stop at once. Invite tokens are never logged (the access log redacts them) or returned. Audit: `admin.invited`, `admin.invite_resent`, `admin.invite_accepted`, `admin.invite_cancelled`, `admin.role_changed`, `admin.deactivated`, `admin.reactivated`.
 
 ## Decisions made while building — please confirm with Loyadham
 | Topic | What the code does now | Change at |

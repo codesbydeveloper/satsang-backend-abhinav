@@ -4,10 +4,11 @@ const { z } = require('zod');
 const config = require('../../config');
 const { query } = require('../../db');
 const validate = require('../../middleware/validate');
-const { adminLimiter, adminOtpLimiter, adminResendLimiter } = require('../../middleware/rateLimit');
+const { adminLimiter, adminOtpLimiter, adminResendLimiter, adminInviteLimiter } = require('../../middleware/rateLimit');
 const { CHALLENGE_MINUTES, signChallengeToken, signAdminToken, loadChallenge, requireAdmin } = require('../../middleware/adminAuth');
 const S = require('../../utils/schemas');
-const { ApiError, unauthorized, tooMany } = require('../../utils/errors');
+const { ApiError, unauthorized, tooMany, notFound } = require('../../utils/errors');
+const { findInvite } = require('../../utils/adminInvites');
 const { audit } = require('../../utils/audit');
 const { sha256, randomCode } = require('../../utils/tokens');
 const { sendAdminLoginCode } = require('../../utils/mailer');
@@ -63,7 +64,8 @@ async function openChallenge(challengeToken) {
 // Step 1: email + password. Emails a 6-digit code and returns a single-use challenge token (no admin token yet).
 router.post('/login', adminLimiter, validate(z.object({ email: S.email, password: z.string().min(1).max(200) })), async (req, res) => {
   const admin = (await query('SELECT * FROM admins WHERE email = ?', [req.body.email]))[0];
-  const ok = await bcrypt.compare(req.body.password, admin ? admin.password_hash : DUMMY_HASH);
+  // invited admins have no password yet: compare against a dummy so the timing and the error stay the same
+  const ok = await bcrypt.compare(req.body.password, admin && admin.password_hash ? admin.password_hash : DUMMY_HASH);
   if (!admin || !admin.is_active) throw unauthorized('INVALID_CREDENTIALS', 'Email or password is incorrect');
   assertNotLocked(admin);
   if (!ok) { await registerFailure(req, admin, 'bad_password'); throw unauthorized('INVALID_CREDENTIALS', 'Email or password is incorrect'); }
@@ -120,6 +122,26 @@ router.post('/resend-otp', adminResendLimiter, validate(z.object({ challengeToke
     [sha256(code), toSql(addMinutes(new Date(), CODE_MINUTES)), row.id]);
   await emailCode(req, admin, code, true);
   res.json({ sent: true, expiresInSeconds: CODE_MINUTES * 60, resendAfterSeconds: RESEND_SECONDS, resendsLeft: MAX_RESENDS - (row.resend_count + 1) });
+});
+
+// Public: what the accept-invite page shows before the new admin chooses a password.
+router.get('/invite/:token', adminInviteLimiter, async (req, res) => {
+  const a = await findInvite(req.params.token);
+  res.json({ email: a.email, name: a.name, role: a.role });
+});
+
+// Public: accept an invite by choosing a password. The admin becomes active; they then log in normally (password + email code).
+router.post('/accept-invite', adminInviteLimiter, validate(z.object({ token: z.string().min(1).max(200), password: z.string().min(12).max(72) })), async (req, res) => {
+  const a = await findInvite(req.body.token);
+  const hash = await bcrypt.hash(req.body.password, config.bcryptRounds);
+  // Only the request that still matches the token wins (the link works once).
+  const r = await query(
+    `UPDATE admins SET password_hash = ?, is_active = 1, invite_token_hash = NULL, invite_expires_at = NULL, activated_at = UTC_TIMESTAMP(),
+       failed_attempts = 0, locked_until = NULL WHERE id = ? AND invite_token_hash = ? AND password_hash IS NULL`,
+    [hash, a.id, a.invite_token_hash]);
+  if (!r.affectedRows) throw notFound('INVITE_INVALID', 'This invite link is not valid. Ask a Full Admin to send a new one.');
+  await audit(req, 'admin.invite_accepted', { admin: a, entityType: 'admin', entityId: a.id });
+  res.json({ ok: true, email: a.email, message: 'Your password is set. You can now log in.' });
 });
 
 router.get('/me', requireAdmin, (req, res) => res.json({ admin: adminView(req.admin) }));

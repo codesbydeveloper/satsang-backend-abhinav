@@ -1,8 +1,8 @@
-# Admin changes 19 Nov 2026: curl / Postman steps (deletion confirmation email, 30-day retained email, email login code)
+# Admin changes 19 Nov 2026: curl / Postman steps (deletion confirmation email, 30-day retained email, email login code, admin invites)
 
 Base URL `http://localhost:3000/api/v1` (start the server with `npm run dev`; with `MAIL_TRANSPORT=console` every
 email is printed in the server console). In Postman: *Import → Raw text* and paste any command below.
-Run `npm run migrate` first (migration 012 retained email, 014 admin login codes). New setting: `RETAINED_EMAIL_DAYS` (default `30`).
+Run `npm run migrate` first (migration 012 retained email, 014 admin login codes, 015 admin invites). New setting: `ADMIN_PANEL_URL` (default `http://localhost:5173`; must be `https://` in production). New setting: `RETAINED_EMAIL_DAYS` (default `30`).
 
 What changed (client approved):
 - When an account deletion completes (in the app, or a Full Admin approves a web-page request, or deletes from the
@@ -109,3 +109,67 @@ email; the previous code stops working. Within 60 seconds of the last email: `42
 Audit log (Full Admin, `GET /admin/audit-log`): `admin.login_code_sent` (`details.resend: true` for a resend),
 `admin.login_code_failed` (`details.attemptsLeft`), `admin.login_success`; wrong passwords stay
 `admin.login_failed`, a lock is `admin.locked`. No code is ever in the log or in a response.
+
+## 8. Add admins by email invite (20 Nov 2026, client approved)
+`npm run seed:admin` is now only for the very first Full Admin (or an emergency). Everyone else is invited from the
+Admin Panel. All calls below except 8.2 and 8.3 need `Authorization: Bearer <full admin token>` (section 7); a
+Content Editor gets `403 ROLE_FORBIDDEN`.
+
+### 8.1 Invite
+```bash
+curl -s -X POST http://localhost:3000/api/v1/admin/admins -H "Authorization: Bearer <full admin token>" -H "Content-Type: application/json" -d '{
+  "email": "priya@example.org", "name": "Priya", "role": "content_editor" }'
+```
+Expected: `201 { "admin": { "id": <newId>, "status": "invited", "isActive": false, "inviteExpiresAt": "<now + 48 h, UTC>", ... } }`.
+The server console shows `[mail:console] to=priya@example.org subject="You've been invited to the Satsang Spark Admin Panel"`
+with "Hello Priya, <your name> has invited you to the Satsang Spark Admin Panel as Content Editor.", the link
+`http://localhost:5173/accept-invite?token=<inviteToken>` and "This link expires in 48 hours.". Copy `<inviteToken>` from it.
+The same email again (any admin, any status): `409 ADMIN_EXISTS`. An invited admin cannot log in yet (`401 INVALID_CREDENTIALS`).
+
+### 8.2 Check the link (public, what the panel's accept-invite page calls first)
+```bash
+curl -s http://localhost:3000/api/v1/admin/auth/invite/<inviteToken>
+```
+Expected: `200 { "email": "priya@example.org", "name": "Priya", "role": "content_editor" }`.
+Unknown / used / replaced / cancelled link: `404 INVITE_INVALID`; older than 48 hours: `410 INVITE_EXPIRED`.
+
+### 8.3 Accept: choose a password (public)
+```bash
+curl -s -X POST http://localhost:3000/api/v1/admin/auth/accept-invite -H "Content-Type: application/json" -d '{
+  "token": "<inviteToken>", "password": "a passphrase of 12+ characters" }'
+```
+Expected: `200 { "ok": true, "email": "priya@example.org", "message": "Your password is set. You can now log in." }`.
+Shorter than 12 characters: `400 VALIDATION_ERROR`. The link now returns `404 INVITE_INVALID`. Priya then logs in as in
+section 7 (password, then the emailed code).
+
+### 8.4 List admins
+```bash
+curl -s http://localhost:3000/api/v1/admin/admins -H "Authorization: Bearer <full admin token>"
+```
+Expected: every admin with `status` `"active"` | `"invited"` | `"inactive"` and `inviteExpiresAt` (only for invited
+admins, otherwise `null`).
+
+### 8.5 Resend or cancel an invite (invited admins only)
+```bash
+curl -s -X POST http://localhost:3000/api/v1/admin/admins/<id>/resend-invite -H "Authorization: Bearer <full admin token>"
+curl -s -X DELETE http://localhost:3000/api/v1/admin/admins/<id> -H "Authorization: Bearer <full admin token>"
+```
+Resend: `200 { "admin": { "status": "invited", "inviteExpiresAt": "<now + 48 h>" } }`, a new email; the old link stops
+working. Cancel: `200 { "ok": true, "cancelled": true }`; the admin and the link are gone. For an admin who has
+accepted: `409 ADMIN_NOT_INVITED` (deactivate them instead).
+
+### 8.6 Change role, deactivate, reactivate
+```bash
+curl -s -X PATCH http://localhost:3000/api/v1/admin/admins/<id> -H "Authorization: Bearer <full admin token>" -H "Content-Type: application/json" -d '{ "role": "full_admin" }'
+curl -s -X PATCH http://localhost:3000/api/v1/admin/admins/<id> -H "Authorization: Bearer <full admin token>" -H "Content-Type: application/json" -d '{ "active": false }'
+curl -s -X PATCH http://localhost:3000/api/v1/admin/admins/<id> -H "Authorization: Bearer <full admin token>" -H "Content-Type: application/json" -d '{ "active": true }'
+```
+Expected: `200 { "admin": { ... } }` with the new `role` / `status` (`"inactive"`, then `"active"`). A role change or
+deactivation ends that admin's sessions at once; a deactivated admin's login gives `401 INVALID_CREDENTIALS`.
+- Your own role: `400 CANNOT_DEMOTE_SELF`; deactivating yourself: `400 CANNOT_DEACTIVATE_SELF`.
+- Would leave no active Full Admin: `409 LAST_FULL_ADMIN`.
+- `active` on an invited admin: `409 ADMIN_INVITED` (only accepting the invite activates them).
+
+Audit log: `admin.invited`, `admin.invite_resent`, `admin.invite_accepted`, `admin.invite_cancelled`,
+`admin.role_changed` (`details: { from, to }`), `admin.deactivated`, `admin.reactivated`. No invite token or password
+is ever in the audit log, in a response, or in the server's access log (the invite path is logged as `/invite/[redacted]`).

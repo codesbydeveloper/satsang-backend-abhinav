@@ -41,6 +41,24 @@ const sendAdminLoginCode = (to, code) => sendMail({
   text: `Your login code is ${code}. It expires in 10 minutes. If you didn't try to log in, change your password.`,
 });
 
+const ROLE_LABELS = { full_admin: 'Full Admin', content_editor: 'Content Editor' };
+/** Admin Panel invite: the invitee's name, who invited them, their role and the link. Nothing else. */
+const sendAdminInvite = (to, { name, invitedBy, role, link }) => sendMail({
+  to,
+  subject: "You've been invited to the Satsang Spark Admin Panel",
+  text: `Hello ${name},
+
+${invitedBy} has invited you to the Satsang Spark Admin Panel as ${ROLE_LABELS[role] || role}.
+
+Open this link to choose your password:
+${link}
+
+This link expires in 48 hours.
+
+After that, you log in with your email and password, and a code we email you each time.
+`,
+});
+
 const DELETED_BODY = 'Your account has been successfully removed. Everything linked to it has been deleted and you have been logged out on every device. Thank you for being part of Satsang Spark.';
 /** Sent when an account deletion completes. Greeting + fixed text only: no other personal data. */
 const sendAccountDeletedEmail = (to) => sendMail({
@@ -53,5 +71,5 @@ ${DELETED_BODY}
   html: `<p>Hello,</p><p>${DELETED_BODY}</p>`,
 });
 
-const mailer = { sendMail, sendVerificationCode, sendPasswordResetCode, sendAdminLoginCode, sendAccountDeletedEmail, outbox };
+const mailer = { sendMail, sendVerificationCode, sendPasswordResetCode, sendAdminLoginCode, sendAdminInvite, sendAccountDeletedEmail, outbox };
 module.exports = mailer;

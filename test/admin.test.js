@@ -199,10 +199,10 @@ test('roles: Content Editor is limited; Full Admin manages admins', async () => 
   const u = await h.adultLogin();
   assert.equal((await api().get('/api/v1/admin/admins').set(bearer(u.accessToken))).status, 401);
 
-  const made = await api().post('/api/v1/admin/admins').set(bearer(b.token)).send({ email: 'NEW@example.org', name: 'New', role: 'content_editor', temporaryPassword: 'TemporaryPass123' });
-  assert.equal(made.status, 201); assert.equal(made.body.admin.email, 'new@example.org');
-  assert.equal((await api().post('/api/v1/admin/admins').set(bearer(b.token)).send({ email: 'new@example.org', role: 'content_editor', temporaryPassword: 'TemporaryPass123' })).status, 409);
-  assert.equal((await api().post('/api/v1/admin/admins').set(bearer(b.token)).send({ email: 'x@example.org', role: 'content_editor', temporaryPassword: 'short' })).status, 400);
+  const made = await api().post('/api/v1/admin/admins').set(bearer(b.token)).send({ email: 'NEW@example.org', name: 'New', role: 'content_editor' });
+  assert.equal(made.status, 201); assert.equal(made.body.admin.email, 'new@example.org'); assert.equal(made.body.admin.status, 'invited');
+  assert.equal((await api().post('/api/v1/admin/admins').set(bearer(b.token)).send({ email: 'new@example.org', name: 'Again', role: 'content_editor' })).body.error.code, 'ADMIN_EXISTS');
+  assert.equal((await api().post('/api/v1/admin/admins').set(bearer(b.token)).send({ email: 'x@example.org', role: 'content_editor' })).status, 400);   // name required
 });
 
 test('cannot remove the last Full Admin or deactivate yourself; changing role ends their sessions', async () => {

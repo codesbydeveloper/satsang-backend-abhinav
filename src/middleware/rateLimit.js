@@ -14,5 +14,6 @@ module.exports = {
   adminLimiter: make(15 * 60 * 1000, 20),         // admin login (email + password)
   adminOtpLimiter: make(15 * 60 * 1000, 20),      // admin verify-otp (per IP; each code also allows only 5 tries)
   adminResendLimiter: make(15 * 60 * 1000, 10),   // admin resend-otp (per IP; each login also allows only 5 resends)
+  adminInviteLimiter: make(15 * 60 * 1000, 20),   // public invite check / accept-invite (per IP)
   generalLimiter: make(60 * 1000, 300),
 };

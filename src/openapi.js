@@ -73,6 +73,14 @@ module.exports = {
       },
       AuthResponse: obj({ accessToken: str(), refreshToken: str(), account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) }),
       Admin: obj({ id: int(), email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }) }),
+      ManagedAdmin: obj({
+        id: int(), email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }),
+        status: str({ enum: ['active', 'invited', 'inactive'], description: 'invited = has not accepted the email invite yet (cannot log in); inactive = deactivated (cannot log in, tokens revoked)' }),
+        isActive: bool(),
+        inviteExpiresAt: str({ format: 'date-time', nullable: true, description: 'UTC; only for status invited (may be in the past: then resend the invite)' }),
+        invitedAt: str({ format: 'date-time', nullable: true }), activatedAt: str({ format: 'date-time', nullable: true, description: 'When the invite was accepted' }),
+        lastLoginAt: str({ format: 'date-time', nullable: true }), createdAt: str({ format: 'date-time' }),
+      }),
       DeletionRequestFiled: obj({ requested: bool(), requestId: int(), status: str({ enum: ['pending'] }), requestedAt: str({ format: 'date-time', description: 'ISO 8601 UTC' }) }),
       DeletionRequest: obj({
         id: int(), accountId: int(), accountType: str({ enum: ['adult', 'parent'] }), source: str({ enum: ['app', 'web'], description: 'app = deleted in the app (always completed, no admin decision), web = public delete-account page (pending until a Full Admin decides)' }),
@@ -260,20 +268,31 @@ module.exports = {
     '/admin/auth/resend-otp': { post: op('Admin Auth', 'Email a new code for the same login; the previous code stops working and the 5 tries start again. At most once per 60 seconds (429 RESEND_TOO_SOON, details.retryAfterSeconds) and 5 times per login (429 RESEND_LIMIT). Not after OTP_LOCKED.', {
       requestBody: body(obj({ challengeToken: str() }, ['challengeToken'])),
       responses: { 200: ok('New code emailed', obj({ sent: bool(), expiresInSeconds: int({ example: 600 }), resendAfterSeconds: int({ example: 60 }), resendsLeft: int() })), ...errors(400, 401, 429), 503: { description: 'EMAIL_FAILED', content: json(ref('Error')) } } }) },
+    '/admin/auth/invite/{token}': { get: op('Admin Auth', 'Public (rate limited): check an invite link before showing the choose-password page. 404 INVITE_INVALID (unknown, used, replaced or cancelled), 410 INVITE_EXPIRED (older than 48 hours: ask for a new one).', {
+      parameters: [{ name: 'token', in: 'path', required: true, schema: str() }], responses: { 200: ok('Valid invite', obj({ email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }) })), ...errors(404), 410: { description: 'INVITE_EXPIRED', content: json(ref('Error')) } } }) },
+    '/admin/auth/accept-invite': { post: op('Admin Auth', 'Public (rate limited): accept an invite by choosing a password (12–72 chars). The admin becomes active and the link stops working; no token is returned: they then log in normally (password + email code). Audited as admin.invite_accepted.', {
+      requestBody: body(obj({ token: str(), password: str({ description: '12–72 chars' }) }, ['token', 'password'])),
+      responses: { 200: ok('Accepted', obj({ ok: bool(), email: str(), message: str() })), ...errors(400, 404), 410: { description: 'INVITE_EXPIRED', content: json(ref('Error')) } } }) },
     '/admin/auth/me': { get: op('Admin Auth', 'Who am I', { security: admin, responses: { 200: ok('Admin', obj({ admin: ref('Admin') })), ...errors(401) } }) },
     '/admin/auth/logout': { post: op('Admin Auth', 'End all of this admin’s sessions', { security: admin, responses: { 200: ok('ok'), ...errors(401) } }) },
     '/admin/auth/change-password': { post: op('Admin Auth', 'Change own password (12+ chars); sessions end', {
       security: admin, requestBody: body(obj({ currentPassword: str(), newPassword: str() }, ['currentPassword', 'newPassword'])), responses: { 200: ok('ok'), ...errors(400, 401) } }) },
 
     '/admin/admins': {
-      get: op('Admin Management', 'List admins (Full Admin)', { security: admin, responses: { 200: ok('Admins'), ...errors(401, 403) } }),
-      post: op('Admin Management', 'Create an admin (Full Admin). Each login: password, then a code emailed to this address.', {
-        security: admin, requestBody: body(obj({ email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), temporaryPassword: str({ description: '12+ chars' }) }, ['email', 'role', 'temporaryPassword'])), responses: { 201: ok('Created'), ...errors(400, 401, 403, 409) } }),
+      get: op('Admin Management', 'List admins (Full Admin) with status active / invited / inactive', { security: admin, responses: { 200: ok('Admins', obj({ admins: { type: 'array', items: ref('ManagedAdmin') } })), ...errors(401, 403) } }),
+      post: op('Admin Management', 'Invite an admin (Full Admin). Creates them as `invited` (no password, cannot log in) and emails "You\'ve been invited to the Satsang Spark Admin Panel" with a link `<ADMIN_PANEL_URL>/accept-invite?token=…` valid 48 hours. 409 ADMIN_EXISTS if any admin (active, invited or inactive) has this email; 503 EMAIL_FAILED if the email cannot be sent (nothing is created). Audited as admin.invited.', {
+        security: admin, requestBody: body(obj({ email: str({ format: 'email' }), name: str({ description: '1–100 chars; used in the email' }), role: str({ enum: ['full_admin', 'content_editor'] }) }, ['email', 'name', 'role'])), responses: { 201: ok('Invited', obj({ admin: ref('ManagedAdmin') })), ...errors(400, 401, 403, 409) } }),
     },
-    '/admin/admins/{id}': { patch: op('Admin Management', 'Rename, change role, or deactivate. The last active Full Admin cannot be removed.', {
-      security: admin, parameters: [idParam], requestBody: body(obj({ name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), isActive: bool() }), false), responses: { 200: ok('Updated'), ...errors(400, 401, 403, 404) } }) },
-    '/admin/admins/{id}/reset-password': { post: op('Admin Management', 'Set a new password for an admin', {
-      security: admin, parameters: [idParam], requestBody: body(obj({ newPassword: str() }, ['newPassword'])), responses: { 200: ok('ok'), ...errors(400, 401, 403, 404) } }) },
+    '/admin/admins/{id}': {
+      patch: op('Admin Management', 'Rename, change role, deactivate (`active: false`) or reactivate (`active: true`). Role change or deactivation ends their sessions. You cannot change your own role (400 CANNOT_DEMOTE_SELF) or deactivate yourself (400 CANNOT_DEACTIVATE_SELF); at least one active Full Admin must remain (409 LAST_FULL_ADMIN). `active` on an invited admin: 409 ADMIN_INVITED. Audited as admin.role_changed { from, to }, admin.deactivated, admin.reactivated. `isActive` is accepted as an older name for `active`.', {
+        security: admin, parameters: [idParam], requestBody: body(obj({ name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), active: bool() }), false), responses: { 200: ok('Updated', obj({ admin: ref('ManagedAdmin') })), ...errors(400, 401, 403, 404, 409) } }),
+      delete: op('Admin Management', 'Cancel an invite: removes an admin who never accepted it (the link stops working). 409 ADMIN_NOT_INVITED for an admin who has accepted (deactivate them instead). Audited as admin.invite_cancelled.', {
+        security: admin, parameters: [idParam], responses: { 200: ok('Cancelled', obj({ ok: bool(), cancelled: bool() })), ...errors(401, 403, 404, 409) } }),
+    },
+    '/admin/admins/{id}/resend-invite': { post: op('Admin Management', 'Email a new 48-hour invite link (the old link stops working). Only for invited admins (409 ADMIN_NOT_INVITED otherwise); 503 EMAIL_FAILED if the email cannot be sent. Audited as admin.invite_resent.', {
+      security: admin, parameters: [idParam], responses: { 200: ok('Resent', obj({ admin: ref('ManagedAdmin') })), ...errors(401, 403, 404, 409) } }) },
+    '/admin/admins/{id}/reset-password': { post: op('Admin Management', 'Emergency: set a new password for an admin who has accepted their invite (sessions end). 409 ADMIN_INVITED for an invited admin.', {
+      security: admin, parameters: [idParam], requestBody: body(obj({ newPassword: str({ description: '12–72 chars' }) }, ['newPassword'])), responses: { 200: ok('ok'), ...errors(400, 401, 403, 404, 409) } }) },
 
     '/admin/users': { get: op('Admin Users', 'Search accounts by email or username (Full Admin)', {
       security: admin, parameters: [{ name: 'q', in: 'query', schema: str() }, { name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int() }], responses: { 200: ok('Page of accounts/profiles'), ...errors(401, 403) } }) },
