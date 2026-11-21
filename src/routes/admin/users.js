@@ -7,6 +7,7 @@ const { requireAdmin, requireRole } = require('../../middleware/adminAuth');
 const { notFound } = require('../../utils/errors');
 const { AGE_GROUP_KEYS, ageGroupForDob, ageOn } =require('../../utils/ageGroup');
 const { audit } = require('../../utils/audit');
+const { STUDENT_STATUSES } = require('../../utils/studentStatus');
 
 const router = express.Router();
 router.use(requireAdmin, requireRole('full_admin'));   // user data is Full Admin only
@@ -14,19 +15,28 @@ router.use(requireAdmin, requireRole('full_admin'));   // user data is Full Admi
 const like = (s) => `%${s.replace(/[\\%_]/g, '\\$&')}%`;
 
 // Search by username or email. Never returns password hashes or the Parent PIN.
-router.get('/', validate(z.object({ q: z.string().trim().max(100).default(''), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25) }), 'query'), async (req, res) => {
-  const { q, page, pageSize } = req.validated.query;
-  const where = q ? 'WHERE a.email LIKE ? OR p.username LIKE ?' : '';
-  const params = q ? [like(q), like(q)] : [];
+// ?studentStatus= keeps only the profiles with that student status (e.g. pending_verification: the review queue).
+const listSchema = z.object({
+  q: z.string().trim().max(100).default(''), studentStatus: z.enum(STUDENT_STATUSES).optional(),
+  page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25),
+});
+router.get('/', validate(listSchema, 'query'), async (req, res) => {
+  const { q, studentStatus, page, pageSize } = req.validated.query;
+  const conds = [];
+  const params = [];
+  if (q) { conds.push('(a.email LIKE ? OR p.username LIKE ?)'); params.push(like(q), like(q)); }
+  if (studentStatus) { conds.push('p.student_status = ?'); params.push(studentStatus); }
+  const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
   const rows = await query(
     `SELECT a.id AS account_id, a.email, a.account_type, a.email_verified_at, a.created_at AS account_created,
-            p.id AS profile_id, p.username, p.age_group, p.age_group_override, p.is_child
+            p.id AS profile_id, p.username, p.age_group, p.age_group_override, p.is_child, p.student_status
        FROM accounts a LEFT JOIN profiles p ON p.account_id = a.id
        ${where} ORDER BY a.id DESC, p.id LIMIT ? OFFSET ?`, [...params, pageSize, (page - 1) * pageSize]);
   const total = (await query(`SELECT COUNT(DISTINCT a.id) AS n FROM accounts a LEFT JOIN profiles p ON p.account_id = a.id ${where}`, params))[0].n;
   res.json({ page, pageSize, totalAccounts: total, rows: rows.map((r) => ({
     accountId: r.account_id, email: r.email, accountType: r.account_type, emailVerified: !!r.email_verified_at, createdAt: r.account_created,
-    profileId: r.profile_id, username: r.username, ageGroup: r.age_group, ageGroupOverridden: !!r.age_group_override, isChild: !!r.is_child })) });
+    profileId: r.profile_id, username: r.username, ageGroup: r.age_group, ageGroupOverridden: !!r.age_group_override, isChild: !!r.is_child,
+    studentStatus: r.profile_id ? r.student_status : null })) });
 });
 
 // The "View" page: one account with all its playable profiles. Never returns the password or Parent PIN hashes.
@@ -35,7 +45,8 @@ router.get('/:accountId', validate(z.object({ accountId: z.coerce.number().int()
                                  privacy_policy_version, consent_accepted_at, created_at FROM accounts WHERE id = ?`, [req.validated.params.accountId]))[0];
   if (!a) throw notFound('ACCOUNT_NOT_FOUND', 'Account not found');
   const profiles = await query(
-    `SELECT p.id, p.username, p.avatar_id, av.avatar_key, p.dob, p.age_group, p.age_group_override, p.is_child, p.language, p.mode, p.created_at
+    `SELECT p.id, p.username, p.avatar_id, av.avatar_key, p.dob, p.age_group, p.age_group_override, p.is_child, p.language, p.mode, p.created_at,
+            p.student_status, p.student_status_updated_at, p.student_verified_by, p.student_verified_at, p.student_sparks_awarded
        FROM profiles p JOIN avatars av ON av.id = p.avatar_id WHERE p.account_id = ? ORDER BY p.id`, [a.id]);
   await audit(req, 'user.viewed', { entityType: 'account', entityId: a.id });
   res.json({
@@ -49,6 +60,8 @@ router.get('/:accountId', validate(z.object({ accountId: z.coerce.number().int()
     profiles: profiles.map((p) => ({
       id: p.id, username: p.username, avatarId: p.avatar_id, avatarKey: p.avatar_key, dob: p.dob, age: ageOn(p.dob),
       ageGroup: p.age_group, ageGroupOverridden: !!p.age_group_override, isChild: !!p.is_child, language: p.language, mode: p.mode, createdAt: p.created_at,
+      studentStatus: p.student_status, studentStatusUpdatedAt: p.student_status_updated_at, studentVerifiedBy: p.student_verified_by,
+      studentVerifiedAt: p.student_verified_at, studentSparksAwarded: p.student_sparks_awarded,
     })),
   });
 });

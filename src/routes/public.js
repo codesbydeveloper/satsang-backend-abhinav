@@ -11,6 +11,7 @@ const { checkUsername } = require('../utils/usernameFilter');
 const { AGE_GROUPS } = require('../utils/ageGroup');
 const { etDate, TZ } = require('../utils/time');
 const { requestDeletion } = require('../utils/deletionRequests');
+const { studentSparks } = require('../utils/studentStatus');
 
 const router = express.Router();
 
@@ -22,6 +23,8 @@ router.get('/meta/config', (_req, res) => {
     parentalConsentAge: config.parentalConsentAge, languages: ['en', 'gu'], modes: ['sanatan', 'satsang'],
     ageGroups: AGE_GROUPS.map((g) => ({ key: g.key, label: g.label, minAge: g.min, maxAge: g.max })),
     serverTimeUtc: now.toISOString(), gameDay: etDate(now), gameTimeZone: TZ,
+    // Student status question: "" = no interest form (the app hides the button)
+    studentInterestFormUrl: config.studentInterestFormUrl, studentSparks: studentSparks(),
   });
 });
 

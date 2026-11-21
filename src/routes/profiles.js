@@ -13,6 +13,8 @@ const { profileView, loadProfiles } = require('../utils/profiles');
 const { signAccessToken } = require('../utils/tokens');
 const { etDate } = require('../utils/time');
 const { deleteChildProfile } = require('../utils/accountDeletion');
+const { setStudentStatusByUser } = require('../utils/studentStatus');
+const { audit } = require('../utils/audit');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -109,6 +111,19 @@ router.patch('/:id', validate(idParam, 'params'), validate(patchSchema), async (
   if (contentLanguage !== undefined) await query('UPDATE profiles SET content_language = ? WHERE id = ?', [contentLanguage, p.id]);
   if (mode !== undefined) await query('UPDATE profiles SET mode = ? WHERE id = ?', [mode, p.id]);
   if (country !== undefined) await query('UPDATE profiles SET country = ? WHERE id = ?', [country, p.id]);
+  const fresh = (await query('SELECT * FROM profiles WHERE id = ?', [p.id]))[0];
+  res.json({ profile: profileView(fresh, { own: true }) });
+});
+
+// Student status (Loyadham Online Classes), asked in profile setup for each playable profile. An independent account
+// answers for its own profile; a parent answers for each child from the parent area (or with the Parent PIN from a
+// child's session, as for the child's other sensitive settings). Locked once a Full Admin verified / confirmed it.
+const studentSchema = z.object({ enrolled: z.boolean(), interested: z.boolean().optional(), pin: S.pin.optional() });
+router.put('/:id/student-status', validate(idParam, 'params'), validate(studentSchema), async (req, res) => {
+  const p = await ownedProfile(req);
+  if (req.account.account_type === 'parent') await requireParentArea(req, req.body.pin);
+  const { from, to } = await tx((c) => setStudentStatusByUser(c, p.id, req.body));
+  await audit(req, 'student.status_set', { entityType: 'profile', entityId: p.id, details: { from, to, by: 'user' } });
   const fresh = (await query('SELECT * FROM profiles WHERE id = ?', [p.id]))[0];
   res.json({ profile: profileView(fresh, { own: true }) });
 });

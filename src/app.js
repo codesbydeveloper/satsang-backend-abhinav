@@ -44,6 +44,7 @@ function createApp() {
   api.use('/admin/auth', require('./routes/admin/auth'));
   api.use('/admin/admins', require('./routes/admin/admins'));
   api.use('/admin/users', require('./routes/admin/users'));
+  api.use('/admin/profiles', require('./routes/admin/profiles'));
   api.use('/admin/blocked-words', require('./routes/admin/blockedWords'));
   api.use('/admin/audit-log', require('./routes/admin/auditLog'));
   api.use('/admin/dashboard', require('./routes/admin/dashboard'));

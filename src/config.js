@@ -34,6 +34,11 @@ const config = {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
+  // Student status (Loyadham Online Classes): Sparks a Full Admin's verification / interest confirmation gives the
+  // profile, and the interest form the app opens ("" = the app hides the form button).
+  studentVerifiedSparks: Number(process.env.STUDENT_VERIFIED_SPARKS ?? 10),
+  studentInterestSparks: Number(process.env.STUDENT_INTEREST_SPARKS ?? 5),
+  studentInterestFormUrl: (process.env.STUDENT_INTEREST_FORM_URL || '').trim(),
   minAppVersion: process.env.MIN_APP_VERSION || '1.0.0',
   privacyPolicyVersion: process.env.PRIVACY_POLICY_VERSION || '1.0',
   parentalConsentAge: Number(process.env.PARENTAL_CONSENT_AGE || 13),
@@ -44,6 +49,15 @@ const config = {
 
 try { new Intl.DateTimeFormat('en', { timeZone: config.dashboardTimeZone }); } catch {
   throw new Error(`DASHBOARD_TIMEZONE "${config.dashboardTimeZone}" is not a valid IANA time zone (e.g. Asia/Kolkata)`);
+}
+
+for (const [name, v] of [['STUDENT_VERIFIED_SPARKS', config.studentVerifiedSparks], ['STUDENT_INTEREST_SPARKS', config.studentInterestSparks]]) {
+  if (!Number.isInteger(v) || v < 0 || v > 100000) throw new Error(`${name} must be a whole number from 0 to 100000`);
+}
+if (config.studentInterestFormUrl) {
+  let u = null;
+  try { u = new URL(config.studentInterestFormUrl); } catch { /* invalid */ }
+  if (!u || !['https:', 'http:'].includes(u.protocol)) throw new Error('STUDENT_INTEREST_FORM_URL must be an http(s) address or empty');
 }
 
 if (config.env === 'production') {

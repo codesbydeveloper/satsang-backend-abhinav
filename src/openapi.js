@@ -48,7 +48,12 @@ module.exports = {
         contentLanguage: str({ enum: ['en', 'gu'], description: 'Content language (questions, games, PDFs, learning content); defaults to the app language' }), mode: str({ enum: ['sanatan', 'satsang'], nullable: true }),
         dob: str({ format: 'date', description: 'Only returned to the profile’s own account.' }),
         country: { ...ref('CountryCode'), nullable: true, description: 'Private: only returned to the profile’s own account (never on leaderboards or public views). Null for profiles created before Profile setup asked for it.' },
+        studentStatus: { ...ref('StudentStatus'), description: 'Only returned to the profile’s own account. Set with PUT /profiles/{id}/student-status.' },
         createdAt: str(),
+      }),
+      StudentStatus: str({
+        enum: ['not_asked', 'pending_verification', 'verified', 'interested', 'interest_confirmed', 'not_enrolled'],
+        description: '"Currently enrolled in Loyadham Online Classes (Bals-Balikas or Kishor-Kishori Classes)?", one answer per profile. not_asked = existing profiles / after an admin reset; pending_verification = said enrolled, waits for a Full Admin; verified = confirmed by a Full Admin (+studentSparks.verified); interested = not enrolled but interested, waits for a Full Admin; interest_confirmed = confirmed by a Full Admin (+studentSparks.interestConfirmed); not_enrolled = not enrolled and not interested, or an enrolment the admin rejected. verified and interest_confirmed are locked for the app.',
       }),
       ReferralView: obj({
         code: str({ example: 'K7P2QX' }), newUserSparks: int(), referrerSparks: int(), windowHours: int(),
@@ -97,7 +102,11 @@ module.exports = {
     },
   },
   paths: {
-    '/meta/config': { get: op('Meta', 'App startup config: minimum supported app version, server time, age groups', { responses: { 200: ok('Config') } }) },
+    '/meta/config': { get: op('Meta', 'App startup config: minimum supported app version, server time, age groups, student-status settings', {
+      description: '`studentInterestFormUrl`: the interest form for the student-status question (STUDENT_INTEREST_FORM_URL); empty string = the app hides the form button. `studentSparks`: `{ verified, interestConfirmed }` Sparks a Full Admin’s verification / interest confirmation gives the profile (STUDENT_VERIFIED_SPARKS, STUDENT_INTEREST_SPARKS; defaults 10 and 5).',
+      responses: { 200: ok('Config', obj({ minAppVersion: str(), privacyPolicyVersion: str(), parentalConsentAge: int(), languages: { type: 'array', items: str() }, modes: { type: 'array', items: str() },
+        ageGroups: { type: 'array', items: obj({ key: str(), label: str(), minAge: int(), maxAge: int({ nullable: true }) }) }, serverTimeUtc: str({ format: 'date-time' }), gameDay: str({ format: 'date' }), gameTimeZone: str(),
+        studentInterestFormUrl: str({ example: '' }), studentSparks: obj({ verified: int({ example: 10 }), interestConfirmed: int({ example: 5 }) }) })) } }) },
     '/avatars': { get: op('Meta', 'The 16 fixed V1 avatars: ids 1–10 animal (shadow, frosty, waddles, turbo, blaze, zippy, bamboo, ace, mango, coco), 11–16 human (young_boy, young_man, gentleman, young_girl, young_woman, lady)', { responses: { 200: ok('Avatar list') } }) },
     '/usernames/check': { get: op('Meta', 'Is a username available and allowed?', {
       parameters: [{ name: 'username', in: 'query', required: true, schema: str() }],
@@ -240,6 +249,12 @@ module.exports = {
         security: user, parameters: [idParam], requestBody: body(obj({ pin: str(), confirm: { type: 'boolean', enum: [true] } }, ['pin', 'confirm'])),
         responses: { 200: ok('Deleted', obj({ deleted: bool(), profileId: int(), sessionsEnded: int() })), ...errors(400, 401, 403, 404, 429) } }),
     },
+    '/profiles/{id}/student-status': { put: op('Profiles', 'Answer "Currently enrolled in Loyadham Online Classes (Bals-Balikas or Kishor-Kishori Classes)?" for one profile', {
+      description: 'enrolled true → `pending_verification`; enrolled false + interested true → `interested`; enrolled false + interested false → `not_enrolled` (interested missing: 400 `INTERESTED_REQUIRED`). '
+        + 'An independent account answers for its own profile; a parent for each own child from the parent area (from a child’s session: `pin` required, else 403 `PARENT_MODE_REQUIRED`). Another account’s profile: 404 `PROFILE_NOT_FOUND`. '
+        + 'Once a Full Admin has verified it (`verified`) or confirmed the interest (`interest_confirmed`): 409 `STUDENT_STATUS_LOCKED`. Audited as student.status_set (profile id only).',
+      security: user, parameters: [idParam], requestBody: body(obj({ enrolled: bool(), interested: bool(), pin: str({ description: 'Parent PIN; only needed from a child’s session' }) }, ['enrolled'])),
+      responses: { 200: ok('Updated', obj({ profile: ref('Profile') })), ...errors(400, 401, 403, 404, 409, 429) } }) },
     '/profiles/{id}/switch': { post: op('Profiles', 'Switch this device to a child profile (Parent PIN required)', {
       security: user, parameters: [idParam], requestBody: body(obj({ pin: str() }, ['pin'])), responses: { 200: ok('New access token for the child profile'), ...errors(401, 403, 404, 429) } }) },
     '/profiles/parent-mode': { post: op('Profiles', 'Leave child mode and return to parent settings (Parent PIN required)', {
@@ -294,8 +309,12 @@ module.exports = {
     '/admin/admins/{id}/reset-password': { post: op('Admin Management', 'Emergency: set a new password for an admin who has accepted their invite (sessions end). 409 ADMIN_INVITED for an invited admin.', {
       security: admin, parameters: [idParam], requestBody: body(obj({ newPassword: str({ description: '12–72 chars' }) }, ['newPassword'])), responses: { 200: ok('ok'), ...errors(400, 401, 403, 404, 409) } }) },
 
-    '/admin/users': { get: op('Admin Users', 'Search accounts by email or username (Full Admin)', {
-      security: admin, parameters: [{ name: 'q', in: 'query', schema: str() }, { name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int() }], responses: { 200: ok('Page of accounts/profiles'), ...errors(401, 403) } }) },
+    '/admin/users': { get: op('Admin Users', 'Search accounts by email or username (Full Admin); one row per profile with its studentStatus', {
+      description: '`studentStatus` keeps only profiles with that status (e.g. `pending_verification` for the enrolment review queue, `interested` for interest confirmations); it combines with `q`. totalAccounts counts the accounts matching both. A row of an account without a profile has studentStatus null.',
+      security: admin, parameters: [{ name: 'q', in: 'query', schema: str() }, { name: 'studentStatus', in: 'query', schema: ref('StudentStatus') }, { name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int() }],
+      responses: { 200: ok('Page of accounts/profiles', obj({ page: int(), pageSize: int(), totalAccounts: int(), rows: { type: 'array', items: obj({
+        accountId: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), emailVerified: bool(), createdAt: str(), profileId: int({ nullable: true }), username: str({ nullable: true }),
+        ageGroup: str({ nullable: true }), ageGroupOverridden: bool(), isChild: bool(), studentStatus: { ...ref('StudentStatus'), nullable: true } }) } })), ...errors(400, 401, 403) } }) },
     '/admin/users/{accountId}': { get: op('Admin Users', 'The "View" page: one account with all its profiles (logged in the audit log as user.viewed)', {
       security: admin, parameters: [{ name: 'accountId', in: 'path', required: true, schema: int() }],
       responses: { 200: ok('Account detail', obj({
@@ -305,7 +324,11 @@ module.exports = {
           privacyPolicyVersion: str({ nullable: true }), consentAcceptedAt: str({ nullable: true, description: 'UTC' }), createdAt: str({ description: 'UTC' }) }),
         profiles: { type: 'array', items: obj({ id: int(), username: str(), avatarId: int(), avatarKey: str(), dob: str({ format: 'date' }), age: int(),
           ageGroup: ref('AgeGroup'), ageGroupOverridden: bool(), isChild: bool(), language: str({ enum: ['en', 'gu'] }),
-          mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), createdAt: str({ description: 'UTC' }) }) },
+          mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), createdAt: str({ description: 'UTC' }),
+          studentStatus: ref('StudentStatus'), studentStatusUpdatedAt: str({ format: 'date-time', nullable: true, description: 'UTC; last change by the user or an admin' }),
+          studentVerifiedBy: int({ nullable: true, description: 'admins.id of the Full Admin who last verified / confirmed (cleared by reset)' }),
+          studentVerifiedAt: str({ format: 'date-time', nullable: true, description: 'UTC' }),
+          studentSparksAwarded: int({ description: 'Total Sparks given for the student status (kept after a reset)' }) }) },
       })), ...errors(401, 403, 404) } }),
       delete: op('Admin Users', 'Permanently delete an account and all its profiles (a parent’s child profiles too). Ends the user’s sessions. Reason is required and audited as user.deleted.', {
         security: admin, parameters: [{ name: 'accountId', in: 'path', required: true, schema: int() }],
@@ -314,6 +337,14 @@ module.exports = {
     '/admin/users/profiles/{id}/age-group': { patch: op('Admin Users', 'Manually set an age group (or null to go back to the DOB-derived group). Reason is required and audited.', {
       security: admin, parameters: [idParam], requestBody: body(obj({ ageGroup: { ...ref('AgeGroup'), nullable: true }, reason: str() }, ['ageGroup', 'reason'])), responses: { 200: ok('Updated'), ...errors(400, 401, 403, 404) } }) },
 
+    '/admin/profiles/{id}/student-status': { post: op('Admin Users', 'Verify / reject an enrolment, confirm an interest, or reset a profile’s student status (Full Admin)', {
+      description: '`verify`: pending_verification → verified, +STUDENT_VERIFIED_SPARKS (default 10). `confirm_interest`: interested → interest_confirmed, +STUDENT_INTEREST_SPARKS (default 5). `reject`: pending_verification → not_enrolled, no Sparks. `reset`: any status except not_asked → not_asked; Sparks already given are not taken back. '
+        + 'Any other combination: 409 `INVALID_STUDENT_TRANSITION`. Sparks go to this exact profile (a child’s go to the child), are reserved until the Milestone 2 Sparks ledger credits them, and each reward is given at most once per profile: after a reset, verifying again answers sparksAwarded 0. '
+        + 'Content Editor: 403 `ROLE_FORBIDDEN`. Audited as student.verified / student.rejected / student.interest_confirmed / student.reset with the profile id only.',
+      security: admin, parameters: [idParam], requestBody: body(obj({ action: str({ enum: ['verify', 'reject', 'confirm_interest', 'reset'] }) }, ['action'])),
+      responses: { 200: ok('Updated', obj({ profileId: int(), studentStatus: ref('StudentStatus'), previousStatus: ref('StudentStatus'),
+        sparksAwarded: int({ description: 'Sparks given by this action (0 for reject / reset, or when this reward was already given)' }),
+        studentSparksAwarded: int({ description: 'The profile’s total student-status Sparks' }) })), ...errors(400, 401, 403, 404, 409) } }) },
     '/admin/blocked-words': {
       get: op('Admin Moderation', 'Username moderation list (Full Admin and Content Editor)', { security: admin, responses: { 200: ok('Words'), ...errors(401, 403) } }),
       post: op('Admin Moderation', 'Add a blocked or reserved word (English, Gujarati script, or transliteration)', {

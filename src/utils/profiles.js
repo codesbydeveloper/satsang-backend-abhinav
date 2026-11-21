@@ -10,6 +10,7 @@ function profileView(p, { own = false } = {}) {
   if (own) {
     v.dob = p.dob;
     v.country = p.country ?? null;
+    v.studentStatus = p.student_status || 'not_asked';
   }
   return v;
 }
