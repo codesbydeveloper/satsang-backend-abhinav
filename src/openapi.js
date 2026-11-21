@@ -310,8 +310,8 @@ module.exports = {
       security: admin, parameters: [idParam], requestBody: body(obj({ newPassword: str({ description: '12–72 chars' }) }, ['newPassword'])), responses: { 200: ok('ok'), ...errors(400, 401, 403, 404, 409) } }) },
 
     '/admin/users': { get: op('Admin Users', 'Search accounts by email or username (Full Admin); one row per profile with its studentStatus', {
-      description: '`studentStatus` keeps only profiles with that status (e.g. `pending_verification` for the enrolment review queue, `interested` for interest confirmations); it combines with `q`. totalAccounts counts the accounts matching both. A row of an account without a profile has studentStatus null.',
-      security: admin, parameters: [{ name: 'q', in: 'query', schema: str() }, { name: 'studentStatus', in: 'query', schema: ref('StudentStatus') }, { name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int() }],
+      description: '`studentStatus` keeps only profiles with that status (e.g. `pending_verification` for the enrolment review queue, `interested` for interest confirmations); a comma list (`pending_verification,interested`) keeps profiles with any of them. It combines with `q`. totalAccounts counts the accounts matching both. A row of an account without a profile has studentStatus null.',
+      security: admin, parameters: [{ name: 'q', in: 'query', schema: str() }, { name: 'studentStatus', in: 'query', schema: str({ example: 'pending_verification,interested' }), description: 'One StudentStatus or a comma list of them' },{ name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int() }],
       responses: { 200: ok('Page of accounts/profiles', obj({ page: int(), pageSize: int(), totalAccounts: int(), rows: { type: 'array', items: obj({
         accountId: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), emailVerified: bool(), createdAt: str(), profileId: int({ nullable: true }), username: str({ nullable: true }),
         ageGroup: str({ nullable: true }), ageGroupOverridden: bool(), isChild: bool(), studentStatus: { ...ref('StudentStatus'), nullable: true } }) } })), ...errors(400, 401, 403) } }) },
@@ -327,6 +327,7 @@ module.exports = {
           mode: str({ enum: ['sanatan', 'satsang'], nullable: true }), createdAt: str({ description: 'UTC' }),
           studentStatus: ref('StudentStatus'), studentStatusUpdatedAt: str({ format: 'date-time', nullable: true, description: 'UTC; last change by the user or an admin' }),
           studentVerifiedBy: int({ nullable: true, description: 'admins.id of the Full Admin who last verified / confirmed (cleared by reset)' }),
+          studentVerifiedByName: str({ nullable: true, description: 'That admin’s name (or email when no name is set); null when studentVerifiedBy is null' }),
           studentVerifiedAt: str({ format: 'date-time', nullable: true, description: 'UTC' }),
           studentSparksAwarded: int({ description: 'Total Sparks given for the student status (kept after a reset)' }) }) },
       })), ...errors(401, 403, 404) } }),
@@ -352,7 +353,7 @@ module.exports = {
     },
     '/admin/blocked-words/{id}': { delete: op('Admin Moderation', 'Remove a word', { security: admin, parameters: [idParam], responses: { 200: ok('Removed'), ...errors(401, 403, 404) } }) },
 
-    '/admin/dashboard': { get: op('Admin Dashboard', 'Live numbers for the Admin Panel home page (Full Admin). "Today" and chart days are calendar days in DASHBOARD_TIMEZONE (default Asia/Kolkata; returned as timeZone). pendingDeletions = deletion requests with status pending. ageGroup is the stored key; label is the display name (same as the app en.json). No emails or DOBs are returned.', {
+    '/admin/dashboard': { get: op('Admin Dashboard', 'Live numbers for the Admin Panel home page (Full Admin). "Today" and chart days are calendar days in DASHBOARD_TIMEZONE (default Asia/Kolkata; returned as timeZone). pendingDeletions = deletion requests with status pending. studentsToVerify = profiles with studentStatus pending_verification + interested (the Users page filter pending_verification,interested). ageGroup is the stored key; label is the display name (same as the app en.json). No emails or DOBs are returned.', {
       security: admin,
       parameters: [
         { name: 'days', in: 'query', schema: int({ enum: [7, 30], default: 7 }), description: 'New-registrations chart range' },
@@ -361,7 +362,8 @@ module.exports = {
       ],
       responses: { 200: ok('Dashboard', obj({
         generatedAt: str({ format: 'date-time' }), timeZone: str({ example: 'Asia/Kolkata', description: 'DASHBOARD_TIMEZONE' }),
-        totals: obj({ accounts: int(), adultAccounts: int(), parentAccounts: int(), profiles: int(), childProfiles: int(), newRegistrationsToday: int(), pendingDeletions: int() }),
+        totals: obj({ accounts: int(), adultAccounts: int(), parentAccounts: int(), profiles: int(), childProfiles: int(), newRegistrationsToday: int(), pendingDeletions: int(),
+          studentsToVerify: int(), studentsPendingVerification: int(), studentsInterested: int() }),
         ageGroups: { type: 'array', items: obj({ ageGroup: ref('AgeGroup'), label: str({ example: 'Yuvaks/Yuvatis A' }), count: int() }) },
         registrations: obj({ days: int(), total: int(), series: { type: 'array', items: obj({ date: str({ format: 'date' }), count: int() }) } }),
         modes: { type: 'array', items: obj({ key: str({ enum: ['sanatan', 'satsang', 'not_set'] }), count: int() }) },

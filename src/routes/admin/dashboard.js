@@ -44,6 +44,9 @@ router.get('/', validate(schema, 'query'), async (req, res) => {
 
   const ageRows = await query('SELECT age_group AS k, COUNT(*) AS n FROM profiles GROUP BY age_group');
   const [del] = await query("SELECT COUNT(*) AS n FROM account_deletion_requests WHERE status = 'pending'");
+  // Loyadham Online Classes answers waiting for a Full Admin: enrolments to verify + interests to confirm.
+  const [stu] = await query(`SELECT COALESCE(SUM(student_status = 'pending_verification'), 0) AS pending,
+                                    COALESCE(SUM(student_status = 'interested'), 0) AS interested FROM profiles`);
   const modeRows = await query("SELECT COALESCE(mode, 'not_set') AS k, COUNT(*) AS n FROM profiles GROUP BY k");
   const langRows = await query('SELECT language AS k, COUNT(*) AS n FROM profiles GROUP BY language');
   const modes = countBy(modeRows, ['sanatan', 'satsang', 'not_set']).filter((m) => m.key !== 'not_set' || m.count > 0);
@@ -71,6 +74,8 @@ router.get('/', validate(schema, 'query'), async (req, res) => {
       accounts: Number(acc.total), adultAccounts: Number(acc.adult), parentAccounts: Number(acc.parent),
       profiles: Number(prof.total), childProfiles: Number(prof.child), newRegistrationsToday: series[series.length - 1].count,
       pendingDeletions: Number(del.n),
+      studentsToVerify: Number(stu.pending) + Number(stu.interested),
+      studentsPendingVerification: Number(stu.pending), studentsInterested: Number(stu.interested),
     },
     ageGroups: countBy(ageRows, AGE_GROUP_KEYS).map(({ key, count }) => ({ ageGroup: key, label: ageGroupLabel(key), count })),
     registrations: { days, total: series.reduce((s, x) => s + x.count, 0), series },

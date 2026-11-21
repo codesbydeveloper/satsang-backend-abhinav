@@ -245,6 +245,15 @@ test('admin users list: studentStatus per profile and ?studentStatus= filter; de
   const withQ = await api().get('/api/v1/admin/users?studentStatus=pending_verification&q=kid_').set(bearer(token));
   assert.deepEqual(withQ.body.rows.map((r) => r.profileId), [kid1.id]);
   assert.equal((await api().get('/api/v1/admin/users?studentStatus=bogus').set(bearer(token))).status, 400);
+  // comma list: the dashboard's "Students to verify" (pending + interested)
+  const toVerify = await api().get('/api/v1/admin/users?studentStatus=pending_verification,interested').set(bearer(token));
+  assert.equal(toVerify.status, 200);
+  assert.deepEqual(toVerify.body.rows.map((r) => r.profileId).sort(), [a.profileId, kid1.id, kid2.id].sort());
+  assert.equal(toVerify.body.totalAccounts, 2);
+  assert.equal((await api().get('/api/v1/admin/users?studentStatus=interested,bogus').set(bearer(token))).status, 400);
+  assert.equal((await api().get('/api/v1/admin/users?studentStatus=,').set(bearer(token))).status, 400);
+  const dash = (await api().get('/api/v1/admin/dashboard').set(bearer(token))).body.totals;
+  assert.deepEqual([dash.studentsToVerify, dash.studentsPendingVerification, dash.studentsInterested], [3, 2, 1]);
 
   await adminAct(token, kid1.id, 'verify');
   const parentAccountId = (await profileRow(kid1.id)).account_id;
@@ -253,7 +262,9 @@ test('admin users list: studentStatus per profile and ?studentStatus= filter; de
   assert.equal(k1.studentStatus, 'verified');
   assert.equal(k1.studentSparksAwarded, 10);
   assert.ok(k1.studentVerifiedBy); assert.match(k1.studentVerifiedAt, /Z$/); assert.match(k1.studentStatusUpdatedAt, /Z$/);
-  assert.equal(detail.body.profiles.find((x) => x.id === kid2.id).studentStatus, 'interested');
+  assert.ok(k1.studentVerifiedByName, 'the verifying admin is named');
+  const k2 = detail.body.profiles.find((x) => x.id === kid2.id);
+  assert.equal(k2.studentStatus, 'interested'); assert.equal(k2.studentVerifiedByName, null);
 });
 
 test('public config: studentInterestFormUrl (empty by default) and the reward amounts', async () => {

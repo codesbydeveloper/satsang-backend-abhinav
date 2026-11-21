@@ -63,7 +63,15 @@ curl -s "http://localhost:3000/api/v1/admin/users?studentStatus=interested" -H "
 ```
 Expected: only rows whose profile has that status; every row carries `studentStatus`. `q` still works together with
 the filter. The user detail (`GET /admin/users/<accountId>`) shows per profile `studentStatus`,
-`studentStatusUpdatedAt`, `studentVerifiedBy`, `studentVerifiedAt`, `studentSparksAwarded`.
+`studentStatusUpdatedAt`, `studentVerifiedBy`, `studentVerifiedByName`, `studentVerifiedAt`, `studentSparksAwarded`.
+
+Both queues at once (the Admin Panel dashboard's "Students to verify" card links here):
+```bash
+curl -s "http://localhost:3000/api/v1/admin/users?studentStatus=pending_verification,interested" -H "Authorization: Bearer <full admin token>"
+curl -s "http://localhost:3000/api/v1/admin/dashboard" -H "Authorization: Bearer <full admin token>"
+```
+Expected: rows with either status (an unknown value in the list → `400`); the dashboard's `totals` carry
+`studentsToVerify` (= `studentsPendingVerification` + `studentsInterested`).
 
 ## 5. Full Admin: verify (+10 Sparks)
 ```bash

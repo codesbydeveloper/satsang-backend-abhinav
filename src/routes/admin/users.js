@@ -16,8 +16,11 @@ const like = (s) => `%${s.replace(/[\\%_]/g, '\\$&')}%`;
 
 // Search by username or email. Never returns password hashes or the Parent PIN.
 // ?studentStatus= keeps only the profiles with that student status (e.g. pending_verification: the review queue).
+// A comma list (pending_verification,interested) keeps profiles with any of them: the dashboard's "Students to verify".
+const statusList = z.string().transform((s) => [...new Set(s.split(',').map((x) => x.trim()).filter(Boolean))])
+  .pipe(z.array(z.enum(STUDENT_STATUSES)).min(1));
 const listSchema = z.object({
-  q: z.string().trim().max(100).default(''), studentStatus: z.enum(STUDENT_STATUSES).optional(),
+  q: z.string().trim().max(100).default(''), studentStatus: statusList.optional(),
   page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
 router.get('/', validate(listSchema, 'query'), async (req, res) => {
@@ -25,7 +28,7 @@ router.get('/', validate(listSchema, 'query'), async (req, res) => {
   const conds = [];
   const params = [];
   if (q) { conds.push('(a.email LIKE ? OR p.username LIKE ?)'); params.push(like(q), like(q)); }
-  if (studentStatus) { conds.push('p.student_status = ?'); params.push(studentStatus); }
+  if (studentStatus) { conds.push(`p.student_status IN (${studentStatus.map(() => '?').join(', ')})`); params.push(...studentStatus); }
   const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
   const rows = await query(
     `SELECT a.id AS account_id, a.email, a.account_type, a.email_verified_at, a.created_at AS account_created,
@@ -46,8 +49,10 @@ router.get('/:accountId', validate(z.object({ accountId: z.coerce.number().int()
   if (!a) throw notFound('ACCOUNT_NOT_FOUND', 'Account not found');
   const profiles = await query(
     `SELECT p.id, p.username, p.avatar_id, av.avatar_key, p.dob, p.age_group, p.age_group_override, p.is_child, p.language, p.mode, p.created_at,
-            p.student_status, p.student_status_updated_at, p.student_verified_by, p.student_verified_at, p.student_sparks_awarded
-       FROM profiles p JOIN avatars av ON av.id = p.avatar_id WHERE p.account_id = ? ORDER BY p.id`, [a.id]);
+            p.student_status, p.student_status_updated_at, p.student_verified_by, p.student_verified_at, p.student_sparks_awarded,
+            vb.name AS verified_by_name, vb.email AS verified_by_email
+       FROM profiles p JOIN avatars av ON av.id = p.avatar_id LEFT JOIN admins vb ON vb.id = p.student_verified_by
+      WHERE p.account_id = ? ORDER BY p.id`, [a.id]);
   await audit(req, 'user.viewed', { entityType: 'account', entityId: a.id });
   res.json({
     account: {
@@ -61,6 +66,8 @@ router.get('/:accountId', validate(z.object({ accountId: z.coerce.number().int()
       id: p.id, username: p.username, avatarId: p.avatar_id, avatarKey: p.avatar_key, dob: p.dob, age: ageOn(p.dob),
       ageGroup: p.age_group, ageGroupOverridden: !!p.age_group_override, isChild: !!p.is_child, language: p.language, mode: p.mode, createdAt: p.created_at,
       studentStatus: p.student_status, studentStatusUpdatedAt: p.student_status_updated_at, studentVerifiedBy: p.student_verified_by,
+      // the verifying admin's name (or email when no name is set) for the Admin Panel; null once reset
+      studentVerifiedByName: p.student_verified_by ? (p.verified_by_name || p.verified_by_email || null) : null,
       studentVerifiedAt: p.student_verified_at, studentSparksAwarded: p.student_sparks_awarded,
     })),
   });
