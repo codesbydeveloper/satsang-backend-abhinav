@@ -49,6 +49,7 @@ module.exports = {
         dob: str({ format: 'date', description: 'Only returned to the profile’s own account.' }),
         country: { ...ref('CountryCode'), nullable: true, description: 'Private: only returned to the profile’s own account (never on leaderboards or public views). Null for profiles created before Profile setup asked for it.' },
         studentStatus: { ...ref('StudentStatus'), description: 'Only returned to the profile’s own account. Set with PUT /profiles/{id}/student-status.' },
+        studentSparksReserved: int({ minimum: 0, description: 'Only returned to the profile’s own account. Sparks this profile received for its student status (verified / interest confirmed), reserved until the Milestone 2 Sparks ledger credits them. Also per child in GET /parent/report.' }),
         createdAt: str(),
       }),
       StudentStatus: str({
@@ -271,7 +272,7 @@ module.exports = {
 
     '/profiles/activity': { post: op('Profiles', 'Older heartbeat (1–300 s added to today). The app uses POST /me/activity/heartbeat.', {
       security: user, requestBody: body(obj({ seconds: int({ minimum: 1, maximum: 300 }) }, ['seconds'])), responses: { 200: ok('ok'), ...errors(400, 401, 403) } }) },
-    '/parent/report': { get: op('Parent PIN', 'Parent report: daily time and activity per child (parent mode only)', {
+    '/parent/report': { get: op('Parent PIN', 'Parent report: daily time and activity per child (parent mode only); each child also carries studentStatus and studentSparksReserved', {
       security: user, parameters: [{ name: 'profileId', in: 'query', schema: int() }, { name: 'days', in: 'query', schema: int({ minimum: 1, maximum: 90, default: 7 }) }], responses: { 200: ok('Report'), ...errors(401, 403, 404) } }) },
 
     '/admin/auth/login': { post: op('Admin Auth', 'Step 1: email + password. If correct (and the admin is active), a 6-digit code is emailed ("Your Satsang Spark admin login code", valid 10 minutes) and a single-use challenge token (10 minutes) is returned. No admin token yet. Wrong email or password: the same 401 INVALID_CREDENTIALS. 5 failures (password or code) lock the admin for 15 minutes: 429 ADMIN_LOCKED.', {

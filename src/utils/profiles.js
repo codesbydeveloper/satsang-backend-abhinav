@@ -11,6 +11,9 @@ function profileView(p, { own = false } = {}) {
     v.dob = p.dob;
     v.country = p.country ?? null;
     v.studentStatus = p.student_status || 'not_asked';
+    // Sparks this profile received for its student status (verified / interest confirmed), reserved until the
+    // Milestone 2 Sparks ledger credits them (profile_sparks_rewards). Own account only, like studentStatus.
+    v.studentSparksReserved = Number(p.student_sparks_awarded || 0);
   }
   return v;
 }

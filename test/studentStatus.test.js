@@ -285,3 +285,40 @@ test('deleting a child profile removes its reserved rewards', async () => {
   assert.equal(del.status, 200);
   assert.equal((await rewards(kid.id)).length, 0);
 });
+
+test('studentSparksReserved: per profile in GET /me, GET /profiles and per child in GET /parent/report (app shows the result)', async () => {
+  const token = await fullAdmin();
+  const p = await h.parentLogin();
+  const kid1 = (await addChild(p, 'kid_one')).body.profile;
+  const kid2 = (await addChild(p, 'kid_two')).body.profile;
+  assert.equal(kid1.studentSparksReserved, 0, 'a new profile has none');
+  await setStatus(p.auth, kid1.id, { enrolled: true });
+  await setStatus(p.auth, kid2.id, { enrolled: false, interested: true });
+  await adminAct(token, kid1.id, 'verify');
+  await adminAct(token, kid2.id, 'confirm_interest');
+
+  const me = await api().get('/api/v1/me').set(p.auth);
+  const byId = Object.fromEntries(me.body.profiles.map((x) => [x.id, x]));
+  assert.equal(byId[kid1.id].studentStatus, 'verified');
+  assert.equal(byId[kid1.id].studentSparksReserved, 10);
+  assert.equal(byId[kid2.id].studentStatus, 'interest_confirmed');
+  assert.equal(byId[kid2.id].studentSparksReserved, 5);
+
+  const report = await api().get('/api/v1/parent/report').set(p.auth);
+  const kids = Object.fromEntries(report.body.children.map((c) => [c.profileId, c]));
+  assert.equal(kids[kid1.id].studentSparksReserved, 10);
+  assert.equal(kids[kid2.id].studentSparksReserved, 5);
+  assert.equal(kids[kid2.id].studentStatus, 'interest_confirmed');
+
+  const a = await adult('asha@example.org', 'asha_p');
+  await setStatus(a.auth, a.profileId, { enrolled: true });
+  await adminAct(token, a.profileId, 'verify');
+  const own = await api().get('/api/v1/profiles').set(a.auth);
+  assert.equal(own.body.profiles[0].studentSparksReserved, 10);
+
+  // A reset keeps the reserved Sparks (nothing is taken back) and they stay visible.
+  await adminAct(token, a.profileId, 'reset');
+  const after = await api().get('/api/v1/me').set(a.auth);
+  assert.equal(after.body.profiles[0].studentStatus, 'not_asked');
+  assert.equal(after.body.profiles[0].studentSparksReserved, 10);
+});

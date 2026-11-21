@@ -54,7 +54,7 @@ const reportSchema = z.object({ profileId: z.coerce.number().int().positive().op
 router.get('/report', validate(reportSchema, 'query'), async (req, res) => {
   if (req.profileId) throw forbidden('PARENT_MODE_REQUIRED', 'Switch to parent mode to view reports');
   const { profileId, days } = req.validated.query;
-  const kids = await query('SELECT id, username, age_group, student_status FROM profiles WHERE account_id = ? AND is_child = 1' + (profileId ? ' AND id = ?' : '') + ' ORDER BY id',
+  const kids = await query('SELECT id, username, age_group, student_status, student_sparks_awarded FROM profiles WHERE account_id = ? AND is_child = 1' + (profileId ? ' AND id = ?' : '') + ' ORDER BY id',
     profileId ? [req.account.id, profileId] : [req.account.id]);
   if (profileId && !kids.length) throw notFound('PROFILE_NOT_FOUND', 'Profile not found');
   const today = etDate();
@@ -66,6 +66,7 @@ router.get('/report', validate(reportSchema, 'query'), async (req, res) => {
     const mine = rows.filter((r) => r.profile_id === k.id);
     const sum = (f) => mine.reduce((t, r) => t + r[f], 0);
     return { profileId: k.id, username: k.username, ageGroup: k.age_group, studentStatus: k.student_status,
+      studentSparksReserved: Number(k.student_sparks_awarded || 0),
       todaySeconds: (mine.find((r) => String(r.game_day).slice(0, 10) === today) || {}).active_seconds || 0,
       totals: { activeSeconds: sum('active_seconds'), learnItemsDone: sum('learn_items_done'), quizzesCompleted: sum('quizzes_completed'), gamesPlayed: sum('games_played'), sparksEarned: sum('sparks_earned') },
       byDay: mine.map((r) => ({ day: String(r.game_day).slice(0, 10), activeSeconds: r.active_seconds, learnItemsDone: r.learn_items_done, quizzesCompleted: r.quizzes_completed, gamesPlayed: r.games_played, sparksEarned: r.sparks_earned })) };
