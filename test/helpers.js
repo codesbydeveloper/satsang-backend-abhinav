@@ -22,7 +22,7 @@ async function resetDb() {
 
 const lastCode = (to) => {
   const m = [...outbox].reverse().find((x) => x.to === to);
-  return m && m.text.match(/Your code: (\d{6})/)[1];
+  return m && m.text.match(/CODE:\n(\d{6})\n/)[1];
 };
 
 const dobYearsAgo = (years, extraDays = 0) => {

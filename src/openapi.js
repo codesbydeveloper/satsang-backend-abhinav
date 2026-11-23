@@ -128,7 +128,7 @@ module.exports = {
       requestBody: body(obj({ email: str(), password: str(), confirm: { type: 'boolean', enum: [true] } }, ['email', 'password', 'confirm'])),
       responses: { 202: ok('Deletion request filed (or the already-pending one returned); a Full Admin approves it', ref('DeletionRequestFiled')), ...errors(401, 429) } }) },
 
-    '/auth/register': { post: op('Auth', 'Create an adult/independent or parent account and email a verification code', {
+    '/auth/register': { post: op('Auth', 'Create an adult/independent or parent account and email a verification code ("🙏 Welcome to Satsang Spark – your verification code"; the 6-digit code expires after 15 minutes)', {
       description: 'Independent ("adult") accounts send only their date of birth (`dob`) here: a neutral age gate asked '
         + 'before anything else. Under the regional consent age (PARENTAL_CONSENT_AGE) the answer is 400 '
         + '`PARENT_ACCOUNT_REQUIRED` and nothing is stored (this check runs before the email check). The username and '
@@ -152,13 +152,13 @@ module.exports = {
     '/auth/verify-email': { post: op('Auth', 'Confirm the 6-digit email code and start a session', {
       description: 'The first verification also reserves the 100 sign-up Sparks for the account (once; credited in Milestone 2).',
       requestBody: body(obj({ email: str(), code: str() }, ['email', 'code'])), responses: { 200: ok('Logged in', ref('AuthResponse')), ...errors(400, 429) } }) },
-    '/auth/resend-code': { post: op('Auth', 'Send a new verification code (always answers ok)', { requestBody: body(obj({ email: str() }, ['email'])), responses: { 200: ok('ok'), ...errors(429) } }) },
+    '/auth/resend-code': { post: op('Auth', 'Send a new verification code, valid 15 minutes; earlier codes stop working (always answers ok)', { requestBody: body(obj({ email: str() }, ['email'])), responses: { 200: ok('ok'), ...errors(429) } }) },
     '/auth/login': { post: op('Auth', 'Log in with email + password', {
       requestBody: body(obj({ email: str(), password: str() }, ['email', 'password'])), responses: { 200: ok('Logged in', ref('AuthResponse')), ...errors(401, 403, 429) } }) },
     '/auth/refresh': { post: op('Auth', 'Exchange a refresh token for a new pair (the old refresh token stops working). The session keeps its active profile; an independent session without one is moved into the account\'s own profile once it exists.', {
       requestBody: body(obj({ refreshToken: str() }, ['refreshToken'])), responses: { 200: ok('New tokens', ref('AuthResponse')), ...errors(401) } }) },
     '/auth/logout': { post: op('Auth', 'End this device session', { security: user, responses: { 200: ok('ok'), ...errors(401) } }) },
-    '/auth/forgot-password': { post: op('Auth', 'Email a password-reset code (always answers ok)', { requestBody: body(obj({ email: str() }, ['email'])), responses: { 200: ok('ok'), ...errors(429) } }) },
+    '/auth/forgot-password': { post: op('Auth', 'Email a password-reset code, valid 15 minutes (always answers ok)', { requestBody: body(obj({ email: str() }, ['email'])), responses: { 200: ok('ok'), ...errors(429) } }) },
     '/auth/reset-password': { post: op('Auth', 'Set a new password with the emailed code; logs out every device', {
       requestBody: body(obj({ email: str(), code: str(), newPassword: str() }, ['email', 'code', 'newPassword'])), responses: { 200: ok('ok'), ...errors(400, 429) } }) },
 
@@ -169,7 +169,7 @@ module.exports = {
         description: 'Deletes at once, in one transaction: the account, every profile (for a parent account every child profile too) and all their data '
           + '(progress, Sparks, Dress Up items, saved Shangars, referral link, leaderboard entries), and every session on every device. A completed '
           + 'row (source `app`, ids and counts only, plus the email for RETAINED_EMAIL_DAYS, shown to Full Admins only) is kept in the deletion history; a pending web-page request for the account is closed. '
-          + 'The owner is emailed "Your Satsang Spark account has been deleted"; a mail failure is logged and never stops the deletion. '
+          + 'The owner is emailed "🙏 Satsang Spark – Account Deletion Confirmation"; a mail failure is logged and never stops the deletion. '
           + 'The public delete-account web page still files a request that a Full Admin approves. Errors: 401 `INVALID_CREDENTIALS` (wrong password), '
           + '403 `PARENT_MODE_REQUIRED` (a parent account while a child plays), 401 `ACCOUNT_DELETED` (already deleted: any call with a token of a deleted account answers this).',
         security: user, requestBody: body(obj({ password: str(), confirm: { type: 'boolean', enum: [true] } }, ['password', 'confirm'])),

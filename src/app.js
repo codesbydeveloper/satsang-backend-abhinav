@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -34,6 +35,11 @@ function createApp() {
     res.json({ success: true, message: 'Satsang Spark API is running', status: 'ok', database });
   });
   app.get('/health', (_req, res) => res.json({ ok: true }));
+  // Public files for emails (the logo). Mail apps load them from another origin, so CORP must allow cross-origin.
+  app.use('/static', express.static(path.join(__dirname, '..', 'public', 'static'), {
+    maxAge: '7d', index: false, dotfiles: 'ignore', fallthrough: true,
+    setHeaders: (res) => res.set('Cross-Origin-Resource-Policy', 'cross-origin'),
+  }));
 
   const api = express.Router();
   api.use(require('./routes/public'));

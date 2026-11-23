@@ -19,40 +19,50 @@ function getTransport() {
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/** The official logo, served by this API at /static/email-logo.png (absolute URL: mail apps cannot load relative ones). */
+const logoUrl = () => `${config.publicBaseUrl}/static/email-logo.png`;
+const SIGNATURE = '— Team Satsang Spark';
+
+const FONT = "Inter,Arial,Helvetica,sans-serif";
+const INK = '#1f2a44';
+const MUTED = '#8a8279';
+/** One block of the layout as HTML. Every text value is escaped here. */
+const BLOCKS = {
+  p: (t) => `<p style="margin:0 0 14px;font-size:16px;line-height:1.5;color:${INK}">${escapeHtml(t)}</p>`,
+  label: (t) => `<p style="margin:8px 0 8px;font-size:13px;font-weight:bold;letter-spacing:1.5px;font-variant:small-caps;text-transform:uppercase;color:#6b645c">${escapeHtml(t)}</p>`,
+  code: (t) => `<p style="margin:0 0 18px;padding:16px 8px;background:#fdf6ec;border:1px solid #f1dcbc;border-radius:10px;font-size:38px;line-height:1.2;font-weight:bold;letter-spacing:8px;color:${INK};font-family:${FONT}">${escapeHtml(t)}</p>`,
+  small: (t) => `<p style="margin:0 0 14px;font-size:13px;line-height:1.5;color:${MUTED}">${escapeHtml(t)}</p>`,
+  sign: (t = SIGNATURE) => `<p style="margin:20px 0 0;font-size:15px;font-weight:bold;color:${INK}">${escapeHtml(t === true ? SIGNATURE : t)}</p>`,
+  rows: (rows) => `<table role="presentation" align="center" style="border-collapse:collapse;margin:0 auto 16px;font-size:14px;text-align:left">${rows.map(([k, v]) =>
+    `<tr><td style="padding:4px 14px 4px 0;color:#6b645c;vertical-align:top">${escapeHtml(k)}</td><td style="padding:4px 0;color:${INK}">${escapeHtml(v)}</td></tr>`).join('')}</table>`,
+  button: ({ label, href }) => `<p style="margin:4px 0 12px"><a href="${escapeHtml(href)}" style="display:inline-block;padding:12px 22px;background:#e8742a;color:#ffffff;border-radius:8px;font-size:16px;font-weight:bold;text-decoration:none">${escapeHtml(label)}</a></p>`
+    + `<p style="margin:0 0 16px;font-size:12px;line-height:1.4;color:${MUTED};word-break:break-all">${escapeHtml(href)}</p>`,
+};
+
 /**
- * The shared branded HTML layout for Satsang Spark emails: a header bar, the title, the given lines (plain text,
- * escaped here) and a footer. Optional, placed after the first `split` lines (default 1): `rows` ([label, value])
- * for a small details table, `code` for a large one-time code, `button` ({ label, href }) for a call-to-action link
- * (the raw URL is repeated under it for mail apps that block buttons).
+ * The shared branded HTML layout for Satsang Spark emails: the logo, a big bold title, then the blocks, centred in a
+ * 480px column (full width on phones). Each block is one of { p }, { label } (small caps), { code } (very large, in
+ * the code box), { small } (grey), { rows: [[label, value]] } (details table), { button: { label, href } } and
+ * { sign: true | text } ("— Team Satsang Spark").
  */
-function brandedHtml({ title, lines = [], rows = [], code = null, button = null, split = 1, footer = 'Satsang Spark · Loyadham' }) {
-  const p = (t) => `<p style="margin:0 0 12px;font-size:15px;line-height:1.5;color:#2d2a26">${escapeHtml(t)}</p>`;
-  const table = rows.length
-    ? `<table role="presentation" style="border-collapse:collapse;margin:0 0 16px;font-size:14px">${rows.map(([k, v]) =>
-      `<tr><td style="padding:4px 16px 4px 0;color:#6b645c;vertical-align:top">${escapeHtml(k)}</td><td style="padding:4px 0;color:#2d2a26">${escapeHtml(v)}</td></tr>`).join('')}</table>`
-    : '';
-  const codeBox = code
-    ? `<p style="margin:0 0 16px;padding:12px 16px;background:#faf7f2;border-radius:6px;font-size:28px;font-weight:bold;letter-spacing:6px;color:#2d2a26;text-align:center">${escapeHtml(code)}</p>`
-    : '';
-  const btn = button
-    ? `<p style="margin:0 0 16px"><a href="${escapeHtml(button.href)}" style="display:inline-block;padding:12px 20px;background:#e8742a;color:#ffffff;border-radius:6px;font-size:15px;font-weight:bold;text-decoration:none">${escapeHtml(button.label)}</a></p>`
-      + `<p style="margin:0 0 16px;font-size:12px;line-height:1.4;color:#6b645c;word-break:break-all">${escapeHtml(button.href)}</p>`
-    : '';
-  return `<!doctype html><html><body style="margin:0;padding:0;background:#f6f1ea;font-family:Arial,Helvetica,sans-serif">
+function brandedHtml({ title, blocks = [] }) {
+  const body = blocks.map((b) => { const [k, v] = Object.entries(b)[0]; return BLOCKS[k](v); }).join('\n');
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title></head>
+<body style="margin:0;padding:0;background:#f6f1ea;font-family:${FONT};-webkit-text-size-adjust:100%">
 <table role="presentation" width="100%" style="border-collapse:collapse;background:#f6f1ea"><tr><td align="center" style="padding:24px 12px">
-<table role="presentation" width="100%" style="max-width:560px;border-collapse:collapse;background:#ffffff;border-radius:8px;overflow:hidden">
-<tr><td style="background:#e8742a;padding:16px 24px;color:#ffffff;font-size:18px;font-weight:bold">Satsang Spark</td></tr>
-<tr><td style="padding:24px">
-<h1 style="margin:0 0 16px;font-size:20px;color:#2d2a26">${escapeHtml(title)}</h1>
-${lines.slice(0, split).map(p).join('')}${table}${codeBox}${btn}${lines.slice(split).map(p).join('')}
+<table role="presentation" width="100%" style="max-width:480px;width:100%;border-collapse:collapse;background:#ffffff;border-radius:12px">
+<tr><td align="center" style="padding:24px 24px 4px"><img src="${escapeHtml(logoUrl())}" width="240" alt="Satsang Spark" style="display:block;width:240px;max-width:100%;height:auto;border:0"></td></tr>
+<tr><td align="center" style="padding:12px 24px 28px;text-align:center;font-family:${FONT}">
+<h1 style="margin:0 0 18px;font-size:26px;line-height:1.25;font-weight:bold;color:${INK}">${escapeHtml(title)}</h1>
+${body}
 </td></tr>
-<tr><td style="padding:12px 24px;background:#faf7f2;color:#8a8279;font-size:12px">${escapeHtml(footer)}</td></tr>
 </table></td></tr></table></body></html>`;
 }
 
-/** Fallback for an email sent without its own HTML: the subject as the title, each text paragraph as a line. */
+/** Fallback for an email sent without its own HTML: the subject as the title, each text paragraph as a block. */
 const htmlFromText = (subject, text) =>
-  brandedHtml({ title: subject, lines: String(text || '').split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean) });
+  brandedHtml({ title: subject, blocks: String(text || '').split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean).map((p) => ({ p })) });
 
 /** Every email goes out as plain text + the branded HTML layout. */
 async function sendMail({ to, subject, text, html }) {
@@ -69,26 +79,74 @@ async function sendMail({ to, subject, text, html }) {
 
 // ---------- app users ----------
 
-const CODE_EXPIRY = 'This code expires in 15 minutes. If you did not request it, you can ignore this email.';
-const codeText = (intro, code) => `${intro}\n\nYour code: ${code}\n\n${CODE_EXPIRY}`;
-const codeEmail = (to, subject, title, intro, code) =>
-  sendMail({ to, subject, text: codeText(intro, code), html: brandedHtml({ title, lines: [`${intro} Your code:`, CODE_EXPIRY], code }) });
+const CODE_MINUTES = 15;   // app verification / reset codes: utils/emailCodes.js uses this same value for expires_at
+const NO_SHARE = '🔒 Please do not share this code with anyone.';
 
-const sendVerificationCode = (to, code) =>
-  codeEmail(to, 'Verify your Satsang Spark email', 'Verify your email', 'Welcome to Satsang Spark!', code);
-const sendPasswordResetCode = (to, code) =>
-  codeEmail(to, 'Reset your Satsang Spark password', 'Reset your password', 'We received a request to reset your password.', code);
+/** Client content (Part A). The code is on its own line after "CODE:" so it is easy to extract from the text part. */
+function sendVerificationCode(to, code) {
+  const title = '🙏 Welcome to Satsang Spark!';
+  const welcome = "We're excited to have you join us!";
+  const label = '✨ YOUR VERIFICATION CODE:';
+  const expires = `⏳ This code expires in ${CODE_MINUTES} minutes.`;
+  const ignore = "If you didn't request this code, you can safely ignore this email.";
+  return sendMail({
+    to,
+    subject: '🙏 Welcome to Satsang Spark – your verification code',
+    text: `${title}
 
-const DELETED_BODY = 'Your account has been successfully removed. Everything linked to it has been deleted and you have been logged out on every device. Thank you for being part of Satsang Spark.';
-/** Sent when an account deletion completes. Greeting + fixed text only: no other personal data. */
+${welcome}
+
+${label}
+${code}
+
+${expires}
+${NO_SHARE}
+
+${ignore}
+
+${SIGNATURE}
+`,
+    html: brandedHtml({ title, blocks: [{ p: welcome }, { label }, { code }, { p: expires }, { p: NO_SHARE }, { small: ignore }, { sign: true }] }),
+  });
+}
+
+function sendPasswordResetCode(to, code) {
+  const intro = 'We received a request to reset your password.';
+  const label = '✨ YOUR PASSWORD RESET CODE:';
+  const expires = `⏳ This code expires in ${CODE_MINUTES} minutes.`;
+  const ignore = "If you didn't request this code, you can safely ignore this email. Your password stays the same.";
+  return sendMail({
+    to,
+    subject: 'Reset your Satsang Spark password',
+    text: `${intro}
+
+${label}
+${code}
+
+${expires}
+${NO_SHARE}
+
+${ignore}
+
+${SIGNATURE}
+`,
+    html: brandedHtml({ title: 'Reset your password', blocks: [{ p: intro }, { label }, { code }, { p: expires }, { p: NO_SHARE }, { small: ignore }, { sign: true }] }),
+  });
+}
+
+/** Sent when an account deletion completes (client content, Part A). Fixed text only: no personal data. */
+const DELETED_LINES = [
+  'Hello,',
+  'Your Satsang Spark account has been successfully deleted.',
+  'All data associated with your account has been permanently deleted, and you have been logged out of all devices.',
+  "We're grateful you were part of the Satsang Spark community. Thank you for being with us! 💛",
+  'Wishing you all the best.',
+];
 const sendAccountDeletedEmail = (to) => sendMail({
   to,
-  subject: 'Your Satsang Spark account has been deleted',
-  text: `Hello,
-
-${DELETED_BODY}
-`,
-  html: brandedHtml({ title: 'Your account has been deleted', lines: ['Hello,', DELETED_BODY] }),
+  subject: '🙏 Satsang Spark – Account Deletion Confirmation',
+  text: `${DELETED_LINES.join('\n\n')}\n\n${SIGNATURE}\n`,
+  html: brandedHtml({ title: 'Account Deletion Confirmation', blocks: [...DELETED_LINES.map((p) => ({ p })), { sign: true }] }),
 });
 
 // ---------- Admin Panel ----------
@@ -98,7 +156,10 @@ const sendAdminLoginCode = (to, code) => sendMail({
   to,
   subject: 'Your Satsang Spark admin login code',
   text: `Your login code is ${code}. It expires in 10 minutes. If you didn't try to log in, change your password.`,
-  html: brandedHtml({ title: 'Your admin login code', lines: ['Your login code is:', "It expires in 10 minutes. If you didn't try to log in, change your password."], code }),
+  html: brandedHtml({
+    title: 'Your admin login code',
+    blocks: [{ label: 'Your login code:' }, { code }, { p: 'It expires in 10 minutes.' }, { small: "If you didn't try to log in, change your password." }],
+  }),
 });
 
 const ROLE_LABELS = { full_admin: 'Full Admin', content_editor: 'Content Editor' };
@@ -122,9 +183,10 @@ ${after}
 `,
     html: brandedHtml({
       title: "You've been invited",
-      lines: [`Hello ${name},`, invited, 'Open this link to choose your password. It expires in 48 hours.', after],
-      button: { label: 'Choose your password', href: link },
-      split: 3,
+      blocks: [
+        { p: `Hello ${name},` }, { p: invited }, { p: 'Open this link to choose your password. It expires in 48 hours.' },
+        { button: { label: 'Choose your password', href: link } }, { small: after },
+      ],
     }),
   });
 };
@@ -154,9 +216,12 @@ Device: ${device}
 
 ${warn}
 `,
-    html: brandedHtml({ title: 'New admin sign-in', lines: [intro, warn], rows: [['Who', who], ['When', when], ['Device', device]] }),
+    html: brandedHtml({ title: 'New admin sign-in', blocks: [{ p: intro }, { rows: [['Who', who], ['When', when], ['Device', device]] }, { p: warn }] }),
   });
 }
 
-const mailer = { sendMail, brandedHtml, sendVerificationCode, sendPasswordResetCode, sendAdminLoginCode, sendAdminInvite, sendAdminLoginAlert, sendAccountDeletedEmail, outbox };
+const mailer = {
+  sendMail, brandedHtml, logoUrl, CODE_MINUTES, SIGNATURE,
+  sendVerificationCode, sendPasswordResetCode, sendAdminLoginCode, sendAdminInvite, sendAdminLoginAlert, sendAccountDeletedEmail, outbox,
+};
 module.exports = mailer;

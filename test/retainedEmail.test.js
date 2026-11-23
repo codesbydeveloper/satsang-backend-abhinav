@@ -10,7 +10,7 @@ beforeEach(h.resetDb);
 after(() => h.pool.end());
 
 const URL = '/api/v1/admin/deletion-requests';
-const SUBJECT = 'Your Satsang Spark account has been deleted';
+const SUBJECT = '🙏 Satsang Spark – Account Deletion Confirmation';
 const deletedMails = (to) => outbox.filter((m) => m.to === to && m.subject === SUBJECT);
 const deleteInApp = (token) => api().delete('/api/v1/me').set(bearer(token)).send({ password: 'Secret123', confirm: true });
 const daysFromNow = (s) => (new Date(s.replace(' ', 'T') + 'Z') - Date.now()) / 86400000;
@@ -21,9 +21,9 @@ test('deleting in the app emails the owner a confirmation (text + html, no perso
   assert.equal(del.status, 200);
   const mails = deletedMails('ravi@example.org');
   assert.equal(mails.length, 1);
-  assert.match(mails[0].text, /Your account has been successfully removed\. Everything linked to it has been deleted and you have been logged out on every device\. Thank you for being part of Satsang Spark\./);
+  assert.match(mails[0].text, /Your Satsang Spark account has been successfully deleted\./);
   assert.match(mails[0].html, /^<!doctype html>/);
-  assert.match(mails[0].html, /<p[^>]*>Your account has been successfully removed\./);
+  assert.match(mails[0].html, /<p[^>]*>Your Satsang Spark account has been successfully deleted\.<\/p>/);
   assert.ok(!/ravi_k|Ravi|Kumar/.test(mails[0].text + mails[0].html), 'no username or name in the email');
 });
 

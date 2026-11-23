@@ -6,7 +6,7 @@ Run `npm run migrate` first (migration 012 retained email, 014 admin login codes
 
 What changed (client approved):
 - When an account deletion completes (in the app, or a Full Admin approves a web-page request, or deletes from the
-  Users page), the owner gets the email **"Your Satsang Spark account has been deleted"**. A parent account's email goes
+  Users page), the owner gets the email **"🙏 Satsang Spark – Account Deletion Confirmation"** (wording updated 23 Nov 2026, see `postman-emails-23nov.md`). A parent account's email goes
   to the parent (child profiles have no email). If sending fails, the error is logged and the deletion still completes.
 - The deleted account's email is kept on its deletion request for `RETAINED_EMAIL_DAYS` days, and **only Full Admins**
   see it (a Users-page delete of an account with no deletion request leaves no request row, so nothing is kept
@@ -20,9 +20,9 @@ curl -s -X DELETE http://localhost:3000/api/v1/me -H "Authorization: Bearer <acc
   "password": "Secret123", "confirm": true }'
 ```
 Expected: `200 { "deleted": true, "profilesDeleted": 1 }`. The server console shows
-`[mail:console] to=<email> subject="Your Satsang Spark account has been deleted"` with the text
-"Your account has been successfully removed. Everything linked to it has been deleted and you have been logged out on
-every device. Thank you for being part of Satsang Spark."
+`[mail:console] to=<email> subject="🙏 Satsang Spark – Account Deletion Confirmation"` with the text
+"Your Satsang Spark account has been successfully deleted. All data associated with your account has been permanently
+deleted, and you have been logged out of all devices. …"
 
 ## 2. Web-page request approved by a Full Admin → email to the parent
 ```bash

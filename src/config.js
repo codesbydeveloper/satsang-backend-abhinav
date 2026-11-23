@@ -7,6 +7,8 @@ const config = {
   port: Number(process.env.PORT || 3000),
   // Admin Panel base URL for invite links. Required (https) in production.
   adminPanelUrl: (process.env.ADMIN_PANEL_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5173')).trim().replace(/\/+$/, ''),
+  // This API's public address, used for absolute URLs in emails (the logo at /static/email-logo.png). https in production.
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || 'http://localhost:3000').trim().replace(/\/+$/, ''),
   corsOrigins: (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
@@ -75,6 +77,9 @@ if (config.env === 'production') {
   let panel = null;
   try { panel = new URL(config.adminPanelUrl); } catch { /* missing or invalid */ }
   if (!panel || panel.protocol !== 'https:') throw new Error('Refusing to start in production: ADMIN_PANEL_URL must be set to the Admin Panel https:// address');
+  let pub = null;
+  try { pub = new URL(config.publicBaseUrl); } catch { /* invalid */ }
+  if (!process.env.PUBLIC_BASE_URL || !pub || pub.protocol !== 'https:') throw new Error('Refusing to start in production: PUBLIC_BASE_URL must be set to this API\'s https:// address (email logo)');
 }
 
 module.exports = config;

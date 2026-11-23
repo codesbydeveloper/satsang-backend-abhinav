@@ -32,14 +32,18 @@ Admins log in with their password and then a 6-digit code emailed to them, so SM
 ```bash
 cp .env.test.example .env.test   # a SEPARATE database whose name ends in _test (tests wipe its tables)
 NODE_ENV=test npm run migrate
-npm test                         # 171 tests: auth, profiles, Parent PIN, settings, deletion, admin roles/invites/login code/trusted devices/remember me/login alerts/audit
+npm test                         # 177 tests: auth, profiles, Parent PIN, settings, deletion, admin roles/invites/login code/trusted devices/remember me/login alerts/audit
 ```
 On Windows use `set NODE_ENV=test&& npm run migrate` (cmd) or `$env:NODE_ENV="test"; npm run migrate` (PowerShell).
 
 ## Email
 `MAIL_TRANSPORT=console` (default) prints verification/reset codes in the server log — fine for development. For real mail set `MAIL_TRANSPORT=smtp` and the `SMTP_*` values from Loyadham (or a service such as Brevo/SendGrid). SPF/DKIM must be set on the sending domain or the emails will land in spam.
 
-Every email is sent as plain text plus HTML in one shared branded layout (`brandedHtml` in `src/utils/mailer.js`: orange header bar, title, text, optional details table / large code / button, footer; every value is HTML-escaped). Add new emails in `mailer.js` with their own `brandedHtml({ … })`; one sent without HTML is wrapped automatically (subject as the title, each text paragraph as a line). The plain-text parts are unchanged.
+Every email is sent as plain text plus HTML in one shared branded layout (`brandedHtml` in `src/utils/mailer.js`): the official logo at the top, a big bold title, then blocks (`p`, small-caps `label`, very large `code` in a box, grey `small`, details `rows`, `button`, `sign` = "— Team Satsang Spark"), centred in a 480 px column (full width on phones), Inter / Arial; every value is HTML-escaped. Add new emails in `mailer.js` with their own `brandedHtml({ title, blocks })`; one sent without HTML is wrapped automatically (subject as the title, each text paragraph as a block).
+
+**Logo:** `public/static/email-logo.png` (the official logo from the Admin Panel, 480 × 240 PNG, ~64 KB) is served at `<PUBLIC_BASE_URL>/static/email-logo.png` (cached 7 days, `Cross-Origin-Resource-Policy: cross-origin` so mail apps can load it) and linked by absolute URL (no base64). Set `PUBLIC_BASE_URL` to this API's public address (default `http://localhost:3000`); in production the server refuses to start unless it is set to an `https://` URL. Mail apps can only show the logo when that address is reachable from the internet.
+
+**Client wording (Part A, 23 Nov 2026):** the verification email ("🙏 Welcome to Satsang Spark – your verification code") and the account deletion email ("🙏 Satsang Spark – Account Deletion Confirmation") use Loyadham's exact text in both parts. Verification and password-reset codes expire after 15 minutes (`CODE_MINUTES` in `mailer.js`, used both for the email text and for `email_codes.expires_at`); the text part puts the code on its own line after "CODE:". `npm run preview:emails` writes every email (HTML + text, sample data, nothing sent) to `tmp/email-previews/` (git-ignored).
 
 ## Project layout
 ```

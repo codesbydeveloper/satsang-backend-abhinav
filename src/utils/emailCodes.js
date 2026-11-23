@@ -3,7 +3,8 @@ const { sha256, randomCode } = require('./tokens');
 const { toSql, addMinutes } = require('./time');
 const { badRequest, tooMany } = require('./errors');
 
-const CODE_MINUTES = 15;
+// Verification / password reset codes stop working after 15 minutes (the emails say so: same constant).
+const { CODE_MINUTES } = require('./mailer');
 const MAX_ATTEMPTS = 5;
 
 /** Create a fresh 6-digit code (older unused codes for the same purpose are cancelled). Returns the raw code. */
@@ -29,4 +30,4 @@ async function consumeCode(accountId, purpose, code) {
   await query('UPDATE email_codes SET consumed_at = UTC_TIMESTAMP() WHERE id = ?', [row.id]);
 }
 
-module.exports = { issueCode, consumeCode };
+module.exports = { CODE_MINUTES, issueCode, consumeCode };
