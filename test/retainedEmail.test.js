@@ -70,12 +70,14 @@ test('Full Admin sees the retained email for 30 days on list and detail; nothing
   const db = (await h.query('SELECT * FROM account_deletion_requests WHERE account_id = ?', [adult.account.id]))[0];
   assert.equal(db.email_retained, 'ravi@example.org');
   assert.ok(Math.abs(daysFromNow(db.email_retained_until) - 30) < 0.01, `until ≈ now + 30 days, got ${db.email_retained_until}`);
-  assert.ok(!JSON.stringify(db).match(/ravi_k|Ravi|Kumar/), 'no username or name on the row');
+  assert.equal(db.username_retained, 'ravi_k');   // username kept for the same period (23 Nov 2026)
+  const { username_retained: _u, ...others } = db;
+  assert.ok(!JSON.stringify(others).match(/ravi_k|Ravi|Kumar/), 'no other username copy and no name on the row');
 
   const l = await api().get(URL).set(bearer(b.token)).query({ status: 'completed' });
   assert.equal(l.body.rows[0].email, 'ravi@example.org');
   assert.equal(l.body.rows[0].emailRetainedUntil, db.email_retained_until.replace(' ', 'T') + '.000Z', 'ISO UTC');
-  assert.equal(l.body.rows[0].username, null);
+  assert.equal(l.body.rows[0].username, 'ravi_k');
   const v = await api().get(`${URL}/${db.id}`).set(bearer(b.token));
   assert.equal(v.body.request.email, 'ravi@example.org');
   assert.equal(v.body.account, null);
@@ -146,10 +148,11 @@ test('search: a Full Admin finds a completed row by its retained email, only unt
   l = await find('other@');
   assert.deepEqual(l.body.rows.map((r) => [r.status, r.email]), [['pending', 'other@example.org']], 'live emails still match');
   l = await find('ravi_k');
-  assert.equal(l.body.rows.length, 0, 'a deleted account cannot be found by its username');
+  assert.deepEqual(l.body.rows.map((r) => [r.status, r.username]), [['completed', 'ravi_k']], 'the retained username matches too');
 
   await h.query('UPDATE account_deletion_requests SET email_retained_until = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 MINUTE) WHERE account_id = ?', [adult.account.id]);
   l = await find('ravi@');
   assert.equal(l.body.rows.length, 0, 'not searchable once past email_retained_until, even before the purge');
   assert.equal(l.body.counts.all, 0);
+  assert.equal((await find('ravi_k')).body.rows.length, 0, 'nor by the username');
 });

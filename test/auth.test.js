@@ -135,10 +135,12 @@ test('adult deletes own account in the app: gone at once, every device logged ou
   assert.equal(history.length, 1);
   assert.deepEqual({ source: history[0].source, status: history[0].status, profiles: history[0].profiles_deleted, by: history[0].decided_by },
     { source: 'app', status: 'completed', profiles: 1, by: null });
-  // only the email is kept, in email_retained, for RETAINED_EMAIL_DAYS (client approved 19 Nov 2026); no username
+  // only the email and username are kept, in email_retained / username_retained, for RETAINED_EMAIL_DAYS
+  // (client approved 19 Nov 2026; username 23 Nov 2026)
   assert.equal(history[0].email_retained, 'ravi@example.org');
-  const { email_retained: _kept, ...rest } = history[0];
-  assert.ok(!JSON.stringify(rest).includes('ravi'), 'no other email copy or username kept');
+  assert.equal(history[0].username_retained, 'ravi_k');
+  const { email_retained: _kept, username_retained: _name, ...rest } = history[0];
+  assert.ok(!JSON.stringify(rest).includes('ravi'), 'no other email or username copy kept');
   assert.equal((await h.query('SELECT COUNT(*) n FROM refresh_tokens'))[0].n, 0);
   assert.equal((await api().get('/api/v1/me').set(bearer(s.accessToken))).status, 401);
   await h.adultLogin(); // same email + username register again

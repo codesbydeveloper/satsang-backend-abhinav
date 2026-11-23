@@ -1,10 +1,10 @@
 const express = require('express');
 const { z } = require('zod');
 const { query, tx } = require('../../db');
-const { deleteAccountCompletely } = require('../../utils/accountDeletion');
+const { deleteAccountCompletely, deleteChildProfile } = require('../../utils/accountDeletion');
 const validate = require('../../middleware/validate');
 const { requireAdmin, requireRole } = require('../../middleware/adminAuth');
-const { notFound } = require('../../utils/errors');
+const { notFound, conflict } = require('../../utils/errors');
 const { AGE_GROUP_KEYS, ageGroupForDob, ageGroupLabel, ageOn } = require('../../utils/ageGroup');
 const { toIso, toSql } = require('../../utils/time');
 const { audit } = require('../../utils/audit');
@@ -159,15 +159,32 @@ router.get('/:accountId', validate(z.object({ accountId: z.coerce.number().int()
 });
 
 // Permanently delete an account. Cascades to every profile (incl. a parent's child profiles) and all
-// profile-owned data, and ends the user's sessions. The audit row keeps no email or username.
+// profile-owned data, and ends the user's sessions. The owner (the parent, for a parent account) gets the deletion
+// email; a completed entry (source admin) keeps the email/username for RETAINED_EMAIL_DAYS. The audit row keeps no
+// email or username.
 router.delete('/:accountId', validate(z.object({ accountId: z.coerce.number().int().positive() }), 'params'),
   validate(z.object({ confirm: z.literal(true), reason: z.string().trim().min(3).max(200) })), async (req, res) => {
     const a = (await query('SELECT id, account_type FROM accounts WHERE id = ?', [req.validated.params.accountId]))[0];
     if (!a) throw notFound('ACCOUNT_NOT_FOUND', 'Account not found');
     // a pending request for this account is now done: the shared service closes it so it leaves the queue
-    const { profilesDeleted: profileCount } = await tx((c) => deleteAccountCompletely(c, a, { decidedBy: req.admin.id, note: 'Deleted from the Users page' }));
-    await audit(req, 'user.deleted', { entityType: 'account', entityId: a.id, details: { accountType: a.account_type, profilesDeleted: profileCount, reason: req.body.reason } });
+    const { profilesDeleted: profileCount, requestId } = await tx((c) => deleteAccountCompletely(c, a, { source: 'admin', decidedBy: req.admin.id, note: req.body.reason }));
+    await audit(req, 'user.deleted', { entityType: 'account', entityId: a.id, details: { accountType: a.account_type, profilesDeleted: profileCount, requestId, reason: req.body.reason } });
     res.json({ deleted: true, accountId: a.id, profilesDeleted: profileCount });
+  });
+
+// Delete ONE child profile and only its own data (progress, activity, student status, reserved Sparks). The parent
+// account and the other children keep their accounts, progress and Sparks. Adult profiles are refused: delete the
+// account instead. Audited as child.deleted with ids only (child profile id, parent account id).
+router.delete('/profiles/:id', validate(z.object({ id: z.coerce.number().int().positive() }), 'params'),
+  validate(z.object({ confirm: z.literal(true), reason: z.string().trim().min(3).max(200) })), async (req, res) => {
+    const p = (await query('SELECT id, account_id, is_child FROM profiles WHERE id = ?', [req.validated.params.id]))[0];
+    if (!p) throw notFound('PROFILE_NOT_FOUND', 'Profile not found');
+    if (!p.is_child) throw conflict('NOT_A_CHILD_PROFILE', 'Only child profiles can be deleted on their own. Delete the account instead.');
+    const r = await tx((c) => deleteChildProfile(c, p.account_id, p.id, { source: 'admin', decidedBy: req.admin.id, note: req.body.reason }));
+    if (!r) throw notFound('PROFILE_NOT_FOUND', 'Profile not found');   // deleted meanwhile
+    await audit(req, 'child.deleted', { entityType: 'profile', entityId: p.id,
+      details: { profileId: p.id, parentAccountId: p.account_id, requestId: r.requestId, reason: req.body.reason } });
+    res.json({ deleted: true, profileId: p.id, parentAccountId: p.account_id, sessionsEnded: r.sessionsEnded });
   });
 
 // Manually set (or clear) a profile's age group. A cleared override goes back to the DOB-derived group.

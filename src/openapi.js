@@ -102,12 +102,16 @@ module.exports = {
       }),
       DeletionRequestFiled: obj({ requested: bool(), requestId: int(), status: str({ enum: ['pending'] }), requestedAt: str({ format: 'date-time', description: 'ISO 8601 UTC' }) }),
       DeletionRequest: obj({
-        id: int(), accountId: int(), accountType: str({ enum: ['adult', 'parent'] }), source: str({ enum: ['app', 'web'], description: 'app = deleted in the app (always completed, no admin decision), web = public delete-account page (pending until a Full Admin decides)' }),
+        id: int(), accountId: int({ description: 'The deleted account; for target child_profile, the parent account (which still exists)' }), accountType: str({ enum: ['adult', 'parent'] }),
+        source: str({ enum: ['app', 'web', 'admin'], description: 'app = deleted in the app (always completed, no admin decision), web = public delete-account page (pending until a Full Admin decides), admin = deleted by a Full Admin from the Users page (always completed)' }),
+        target: str({ enum: ['account', 'child_profile'], description: 'account = the whole account with all its profiles; child_profile = ONE child deleted on its own (the parent and other children kept)' }),
+        profileId: int({ nullable: true, description: 'The deleted child profile (target child_profile); null otherwise' }),
+        isParentEmail: ({ type: 'boolean', description: 'True when email is a parent’s: a parent account, or a deleted child (children have no email of their own)' }),
         deletedByOwner: { type: 'boolean', description: 'True when the owner deleted the account in the app (completed, no admin decision)' },
         status: str({ enum: ['pending', 'completed', 'rejected'] }),
-        username: str({ nullable: true, description: 'The adult’s own profile; null for parent accounts and once the account is deleted' }),
+        username: str({ nullable: true, description: 'The adult’s own profile (the child’s, for target child_profile); null for parent accounts. Once completed: Full Admin only, the copy kept on this request until emailRetainedUntil, then null (Details removed).' }),
         email: str({ nullable: true, description: 'Full Admin only (null for every other role). While the account exists: its live email. Once deleted: the email kept on this request until emailRetainedUntil (RETAINED_EMAIL_DAYS, default 30 days after the deletion), then null — the purge job erases it.' }),
-        emailRetainedUntil: str({ format: 'date-time', nullable: true, description: 'ISO 8601 UTC. Completed rows: when the retained email is (or was) erased; in the past once it is gone. Null for pending/rejected rows and completed rows that kept no email.' }),
+        emailRetainedUntil: str({ format: 'date-time', nullable: true, description: 'ISO 8601 UTC. Completed rows: when the retained email AND username are (or were) erased; in the past once they are gone (the panel then shows “Details removed” and the request id). Null for pending/rejected rows and completed rows that kept neither.' }),
         emailVerified: { type: 'boolean', nullable: true },
         childProfiles: int(), profilesDeleted: int({ nullable: true }), requestedAt: str({ format: 'date-time', description: 'ISO 8601 UTC' }), decidedAt: str({ format: 'date-time', nullable: true, description: 'ISO 8601 UTC' }),
         decidedBy: { ...obj({ id: int(), name: str() }), nullable: true }, decisionNote: str({ nullable: true, description: 'Rejection reason or approval note' }),
@@ -375,10 +379,17 @@ module.exports = {
           studentVerifiedAt: str({ format: 'date-time', nullable: true, description: 'UTC' }),
           studentSparksAwarded: int({ description: 'Total Sparks given for the student status (kept after a reset)' }) }) },
       })), ...errors(401, 403, 404) } }),
-      delete: op('Admin Users', 'Permanently delete an account and all its profiles (a parent’s child profiles too). Ends the user’s sessions. Reason is required and audited as user.deleted.', {
+      delete: op('Admin Users', 'Permanently delete an account and all its profiles (for a parent: the parent account and every child profile). Ends the user’s sessions and emails the owner (the parent) a deletion confirmation. A completed deletion entry (source admin) keeps the email and username for RETAINED_EMAIL_DAYS. Reason is required and audited as user.deleted.', {
         security: admin, parameters: [{ name: 'accountId', in: 'path', required: true, schema: int() }],
         requestBody: body(obj({ confirm: { type: 'boolean', enum: [true] }, reason: str({ description: '3–200 chars' }) }, ['confirm', 'reason'])),
         responses: { 200: ok('Deleted', obj({ deleted: bool(), accountId: int(), profilesDeleted: int() })), ...errors(400, 401, 403, 404) } }) },
+    '/admin/users/profiles/{id}': { delete: op('Admin Users', 'Delete ONE child profile (Full Admin)', {
+      description: 'Removes only that child profile and its own data: progress, daily activity, Explore imports, student status and its reserved Sparks rewards. The parent account and every other child keep their accounts, progress and Sparks. Devices playing as that child are logged out. '
+        + 'A completed deletion entry (target child_profile, source admin) keeps the child’s username and the parent’s email for RETAINED_EMAIL_DAYS. Audited as child.deleted with { profileId, parentAccountId, requestId, reason }. '
+        + 'An adult’s own profile: 409 NOT_A_CHILD_PROFILE (delete the account instead).',
+      security: admin, parameters: [idParam],
+      requestBody: body(obj({ confirm: { type: 'boolean', enum: [true] }, reason: str({ description: '3–200 chars' }) }, ['confirm', 'reason'])),
+      responses: { 200: ok('Deleted', obj({ deleted: bool(), profileId: int(), parentAccountId: int(), sessionsEnded: int() })), ...errors(400, 401, 403, 404, 409) } }) },
     '/admin/users/profiles/{id}/age-group': { patch: op('Admin Users', 'Manually set an age group (or null to go back to the DOB-derived group). Reason is required and audited.', {
       security: admin, parameters: [idParam], requestBody: body(obj({ ageGroup: { ...ref('AgeGroup'), nullable: true }, reason: str() }, ['ageGroup', 'reason'])), responses: { 200: ok('Updated'), ...errors(400, 401, 403, 404) } }) },
 
@@ -420,8 +431,8 @@ module.exports = {
       security: admin,
       parameters: [
         { name: 'status', in: 'query', schema: str({ enum: ['pending', 'completed', 'rejected', 'all'], default: 'pending' }) },
-        { name: 'q', in: 'query', schema: str(), description: 'Username or email: the live email on pending/rejected rows, and (Full Admin only) the retained email on completed rows until emailRetainedUntil' },
-        { name: 'source', in: 'query', schema: str({ enum: ['app', 'web', 'all'], default: 'all' }) },
+        { name: 'q', in: 'query', schema: str(), description: 'Username or email: the live ones on pending/rejected rows, and (Full Admin only) the retained username or email on completed rows until emailRetainedUntil. "123" or "#123" also matches request id 123.' },
+        { name: 'source', in: 'query', schema: str({ enum: ['app', 'web', 'admin', 'all'], default: 'all' }) },
         { name: 'page', in: 'query', schema: int({ default: 1 }) }, { name: 'pageSize', in: 'query', schema: int({ default: 25, maximum: 100 }) },
       ],
       responses: { 200: ok('Page of requests', obj({ status: str(), page: int(), pageSize: int(), total: int(),

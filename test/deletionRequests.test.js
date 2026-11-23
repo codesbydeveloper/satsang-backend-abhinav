@@ -135,7 +135,7 @@ test('deleting in the app: completed at once, listed as source app with no admin
   assert.equal(row.deletedByOwner, true);
   assert.equal(row.decidedBy, null);
   assert.equal(row.email, 'solo@example.org');   // retained for 30 days, Full Admins only
-  assert.equal(row.username, null);
+  assert.equal(row.username, 'solo_one');         // retained for the same period (23 Nov 2026)
   assert.equal(row.profilesDeleted, 1);
   assert.equal(done.body.counts.pending, 0, 'in-app deletions never wait in the queue');
   // the adult's pending web request is untouched

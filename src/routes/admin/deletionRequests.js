@@ -15,11 +15,13 @@ const idParam = validate(z.object({ id: z.coerce.number().int().positive() }), '
 
 // Live account fields are joined only while the account still exists (pending / rejected).
 // Username is the adult's own profile; parent accounts have no profile of their own, so it is null.
-// A completed row may still hold the deleted account's email (email_retained) until email_retained_until;
-// retained_live is computed in SQL so the cut-off uses the database's UTC clock.
+// A completed row may still hold the deleted account's email (email_retained) and username (username_retained)
+// until email_retained_until; retained_live is computed in SQL so the cut-off uses the database's UTC clock.
+// target 'child_profile': one child deleted on its own; account_id is the parent (who still exists, but the row is
+// completed, so no live join), the email is the parent's and the username the child's.
 const SELECT = `
   SELECT r.*, a.email, a.email_verified_at, a.created_at AS account_created, ad.name AS decided_by_name,
-         (r.email_retained IS NOT NULL AND r.email_retained_until > UTC_TIMESTAMP()) AS retained_live,
+         (r.email_retained_until > UTC_TIMESTAMP() AND (r.email_retained IS NOT NULL OR r.username_retained IS NOT NULL)) AS retained_live,
          (SELECT p.username FROM profiles p WHERE p.account_id = a.id AND p.is_child = 0 ORDER BY p.id LIMIT 1) AS username,
          (SELECT COUNT(*) FROM profiles p WHERE p.account_id = a.id AND p.is_child = 1) AS child_profiles
     FROM account_deletion_requests r
@@ -35,16 +37,25 @@ const emailFor = (r, admin) => {
   if (r.status !== 'completed') return r.email || null;
   return Number(r.retained_live) ? r.email_retained : null;
 };
+/** Username: live while the account exists; once completed, the retained copy (Full Admin only) until the cut-off. */
+const usernameFor = (r, admin) => {
+  if (r.status !== 'completed') return r.username || null;
+  if (!admin || admin.role !== 'full_admin') return null;
+  return Number(r.retained_live) ? r.username_retained : null;
+};
 
 const row = (r, admin) => {
   const gone = r.status === 'completed';
+  const child = r.target === 'child_profile';
   const email = emailFor(r, admin);
   return {
     id: r.id, accountId: r.account_id, accountType: r.account_type, source: r.source, status: r.status,
-    username: gone ? null : r.username, email,
-    emailRetainedUntil: gone ? r.email_retained_until : null,   // not personal: lets the panel say 'erased' once it has passed
+    target: r.target || 'account', profileId: r.profile_id ?? null,
+    isParentEmail: child || r.account_type === 'parent',   // a child has no email of its own: the parent's is shown
+    username: usernameFor(r, admin), email,
+    emailRetainedUntil: gone ? r.email_retained_until : null,   // not personal: lets the panel say 'Details removed' once it has passed
     emailVerified: gone ? null : !!r.email_verified_at,
-    childProfiles: gone ? (r.account_type === 'parent' ? r.profiles_deleted : 0) : Number(r.child_profiles),
+    childProfiles: child ? 0 : gone ? (r.account_type === 'parent' ? r.profiles_deleted : 0) : Number(r.child_profiles),
     profilesDeleted: r.profiles_deleted, requestedAt: r.requested_at,
     deletedByOwner: r.status === 'completed' && !r.decided_by,   // deleted in the app (DELETE /me): no admin decided
     decidedAt: r.decided_at, decidedBy: r.decided_by ? { id: r.decided_by, name: r.decided_by_name } : null, decisionNote: r.decision_note,
@@ -55,7 +66,7 @@ const row = (r, admin) => {
 const listSchema = z.object({
   status: z.enum(['pending', 'completed', 'rejected', 'all']).default('pending'),
   q: z.string().trim().max(100).default(''),
-  source: z.enum(['app', 'web', 'all']).default('all'),
+  source: z.enum(['app', 'web', 'admin', 'all']).default('all'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
@@ -63,11 +74,13 @@ router.get('/', validate(listSchema, 'query'), async (req, res) => {
   const { status, q, source, page, pageSize } = req.validated.query;
   const where = []; const params = [];
   if (q) {
-    // Completed rows have no live account; a Full Admin can still find one by its retained email until it is erased.
+    // Completed rows have no live account; a Full Admin can still find one by its retained username or email until
+    // they are erased. "#123" / "123" also finds request 123 (all that is shown once the details are removed).
     const retained = req.admin.role === 'full_admin'
-      ? " OR (r.status = 'completed' AND r.email_retained_until > UTC_TIMESTAMP() AND r.email_retained LIKE ?)" : '';
-    where.push(`(a.email LIKE ? OR EXISTS (SELECT 1 FROM profiles p WHERE p.account_id = a.id AND p.username LIKE ?)${retained})`);
-    params.push(like(q), like(q), ...(retained ? [like(q)] : []));
+      ? " OR (r.status = 'completed' AND r.email_retained_until > UTC_TIMESTAMP() AND (r.email_retained LIKE ? OR r.username_retained LIKE ?))" : '';
+    const idMatch = /^#?\d{1,18}$/.test(q) ? ' OR r.id = ?' : '';
+    where.push(`(a.email LIKE ? OR EXISTS (SELECT 1 FROM profiles p WHERE p.account_id = a.id AND p.username LIKE ?)${retained}${idMatch})`);
+    params.push(like(q), like(q), ...(retained ? [like(q), like(q)] : []), ...(idMatch ? [q.replace('#', '')] : []));
   }
   if (source !== 'all') { where.push('r.source = ?'); params.push(source); }
   const base = `FROM account_deletion_requests r LEFT JOIN accounts a ON a.id = r.account_id AND r.status <> 'completed' ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
@@ -137,3 +150,4 @@ router.post('/:id/reject', idParam, validate(z.object({ reason: z.string().trim(
 
 module.exports = router;
 module.exports.emailFor = emailFor;   // for tests
+module.exports.usernameFor = usernameFor;

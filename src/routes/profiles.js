@@ -129,14 +129,14 @@ router.put('/:id/student-status', validate(idParam, 'params'), validate(studentS
 });
 
 // Delete one child profile and all its data with the Parent PIN (contract 3.4); the parent account and the other
-// children are untouched. From the parent area only. Devices playing as that child are logged out. Nothing about the
-// child is logged or kept.
+// children are untouched. From the parent area only. Devices playing as that child are logged out. A completed
+// deletion entry keeps the child's username and the parent's email for RETAINED_EMAIL_DAYS (Full Admins only).
 router.delete('/:id', requireParent, validate(idParam, 'params'), validate(z.object({ pin: S.pin, confirm: z.literal(true) })), async (req, res) => {
   if (req.profileId) throw forbidden('PARENT_MODE_REQUIRED', 'Switch to the parent area first');
   const p = await ownedProfile(req);
   if (!p.is_child) throw forbidden('NOT_A_CHILD_PROFILE', 'Only child profiles can be deleted this way');
   await verifyPin(req.account, req.body.pin);
-  const sessionsEnded = await tx((c) => deleteChildProfile(c, req.account.id, p.id));   // cascades to all its data
+  const { sessionsEnded } = await tx((c) => deleteChildProfile(c, req.account.id, p.id, { source: 'app' }));   // cascades to all its data
   res.json({ deleted: true, profileId: p.id, sessionsEnded });
 });
 

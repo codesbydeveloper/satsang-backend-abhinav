@@ -4,14 +4,15 @@ const { audit } = require('./audit');
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Erase deleted accounts' emails whose retention period is over (email_retained_until < now). Runs on server
+ * Erase deleted accounts' (and child profiles') emails and usernames whose retention period is over (email_retained_until < now). Runs on server
  * start, every 24 hours, and from `npm run purge:retained-emails` (cPanel cron). When anything was erased an
  * audit row (retained_emails.purged) records the count only.
- * @returns {Promise<number>} how many emails were erased
+ * @returns {Promise<number>} how many entries were erased
  */
 async function purgeRetainedEmails() {
   const r = await query(
-    'UPDATE account_deletion_requests SET email_retained = NULL WHERE email_retained IS NOT NULL AND email_retained_until < UTC_TIMESTAMP()');
+    `UPDATE account_deletion_requests SET email_retained = NULL, username_retained = NULL
+      WHERE (email_retained IS NOT NULL OR username_retained IS NOT NULL) AND email_retained_until < UTC_TIMESTAMP()`);
   const purged = r.affectedRows || 0;
   if (purged) await audit({}, 'retained_emails.purged', { entityType: 'deletion_request', details: { count: purged } });
   return purged;
