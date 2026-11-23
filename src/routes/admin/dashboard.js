@@ -5,7 +5,7 @@ const validate = require('../../middleware/validate');
 const { requireAdmin, requireRole } = require('../../middleware/adminAuth');
 const config = require('../../config');
 const { AGE_GROUP_KEYS, ageGroupLabel } = require('../../utils/ageGroup');
-const { dateIn, fromSql } = require('../../utils/time');
+const { dateIn, fromSql, startOfDayIn } = require('../../utils/time');
 
 const router = express.Router();
 router.use(requireAdmin, requireRole('full_admin'));   // user data is Full Admin only
@@ -23,6 +23,9 @@ const countBy = (rows, keys) => {
 
 // Everything the Admin Panel dashboard shows, in one call. Counts are live; "today" and the chart days are calendar
 // days in DASHBOARD_TIMEZONE (config.dashboardTimeZone, default Asia/Kolkata). DOBs and emails are never returned here.
+// The totals use the Users table's definitions, so each card opens GET /admin/users with the same count in totalRows:
+// adultAccounts ↔ accountType=adult, parentAccounts ↔ accountType=parent, childProfiles ↔ accountType=child,
+// studentsToVerify ↔ studentStatus=pending_verification,interested, newRegistrationsToday ↔ joinedSince=todayStartsAt.
 const schema = z.object({
   days: z.coerce.number().int().refine((n) => n === 7 || n === 30, 'days must be 7 or 30').default(7),
   recent: z.coerce.number().int().min(1).max(50).default(5),
@@ -73,6 +76,7 @@ router.get('/', validate(schema, 'query'), async (req, res) => {
     totals: {
       accounts: Number(acc.total), adultAccounts: Number(acc.adult), parentAccounts: Number(acc.parent),
       profiles: Number(prof.total), childProfiles: Number(prof.child), newRegistrationsToday: series[series.length - 1].count,
+      todayStartsAt: startOfDayIn(tz).toISOString(),
       pendingDeletions: Number(del.n),
       studentsToVerify: Number(stu.pending) + Number(stu.interested),
       studentsPendingVerification: Number(stu.pending), studentsInterested: Number(stu.interested),

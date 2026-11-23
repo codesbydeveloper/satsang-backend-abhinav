@@ -37,4 +37,17 @@ function dateIn(timeZone, d = new Date()) {
 /** Calendar date (YYYY-MM-DD) of an instant in Eastern Time — the "game day". */
 const etDate = (d = new Date()) => dateIn(TZ, d);
 
-module.exports = { TZ, nowUtc, toSql, fromSql, toIso, jsonTimestamps, addMinutes, addDays, etDate, dateIn };
+/** The instant (a Date) when the calendar day `date` (YYYY-MM-DD, default today) starts in `timeZone`; DST-aware. */
+function startOfDayIn(timeZone, date = dateIn(timeZone)) {
+  const [y, m, d] = date.split('-').map(Number);
+  const midnightUtc = Date.UTC(y, m - 1, d);
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const offset = (t) => {   // how far the zone's wall clock is ahead of UTC at instant t
+    const p = Object.fromEntries(fmt.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+    return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - t;
+  };
+  const guess = midnightUtc - offset(midnightUtc);
+  return new Date(midnightUtc - offset(guess));   // second pass: the offset at the real instant (DST days)
+}
+
+module.exports = { TZ, nowUtc, toSql, fromSql, toIso, jsonTimestamps, addMinutes, addDays, etDate, dateIn, startOfDayIn };

@@ -6,7 +6,7 @@ const validate = require('../../middleware/validate');
 const { requireAdmin, requireRole } = require('../../middleware/adminAuth');
 const { notFound } = require('../../utils/errors');
 const { AGE_GROUP_KEYS, ageGroupForDob, ageGroupLabel, ageOn } = require('../../utils/ageGroup');
-const { toIso } = require('../../utils/time');
+const { toIso, toSql } = require('../../utils/time');
 const { audit } = require('../../utils/audit');
 const { STUDENT_STATUSES } = require('../../utils/studentStatus');
 
@@ -52,6 +52,8 @@ const listSchema = z.object({
   accountType: z.enum(['adult', 'parent', 'child']).optional(),
   classStatus: z.enum(['all', ...Object.keys(CLASS_STATUS)]).default('all'),
   studentStatus: statusList.optional(),
+  // accounts created at/after this instant (account rows only): the dashboard's "New registrations today"
+  joinedSince: z.string().datetime({ offset: true }).transform((s) => new Date(s)).optional(),
   sort: z.enum(Object.keys(SORTS)).default('joined'),
   order: z.enum(['asc', 'desc']).optional(),   // default: newest first for joined, A→Z otherwise
   page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25),
@@ -71,13 +73,14 @@ const ROWS = `WITH r AS (
     FROM profiles c JOIN accounts a ON a.id = c.account_id WHERE c.is_child = 1)`;
 
 router.get('/', validate(listSchema, 'query'), async (req, res) => {
-  const { q, country, ageGroup, accountType, classStatus, studentStatus, sort, page, pageSize } = req.validated.query;
+  const { q, country, ageGroup, accountType, classStatus, studentStatus, joinedSince, sort, page, pageSize } = req.validated.query;
   const order = req.validated.query.order || (sort === 'joined' ? 'desc' : 'asc');
   const conds = []; const params = [];
   if (q) { conds.push('(LOWER(r.name) LIKE ? OR LOWER(r.username) LIKE ? OR LOWER(r.email) LIKE ?)'); const l = like(q.toLowerCase()); params.push(l, l, l); }
   if (country) { conds.push('r.country = ?'); params.push(country); }
   if (ageGroup) { conds.push('r.age_group = ?'); params.push(ageGroup); }
   if (accountType) { conds.push('r.row_type = ?'); params.push(accountType); }
+  if (joinedSince) { conds.push('(r.is_child_row = 0 AND r.joined >= ?)'); params.push(toSql(joinedSince)); }
   for (const list of [classStatus !== 'all' && CLASS_STATUS[classStatus], studentStatus]) {
     if (list) { conds.push(`r.student_status IN (${list.map(() => '?').join(', ')})`); params.push(...list); }
   }
@@ -86,6 +89,8 @@ router.get('/', validate(listSchema, 'query'), async (req, res) => {
 
   const fam = `${ROWS}, fam AS (SELECT DISTINCT r.account_id FROM r WHERE ${match})`;
   const total = (await query(`${fam} SELECT COUNT(*) AS n FROM fam`, params))[0].n;
+  // rows matching the filters themselves (greyed parent rows not counted): equals the dashboard card numbers
+  const totalRows = (await query(`${ROWS} SELECT COUNT(*) AS n FROM r WHERE ${match}`, params))[0].n;
   const heads = await query(
     `${fam} SELECT h.account_id FROM r h JOIN fam f ON f.account_id = h.account_id WHERE h.is_child_row = 0
       ORDER BY (${s.sql}) IS NULL, ${s.sql} ${dir}, h.account_id ${sort === 'joined' ? dir : 'DESC'} LIMIT ? OFFSET ?`, [...params, pageSize, (page - 1) * pageSize]);
@@ -107,7 +112,7 @@ router.get('/', validate(listSchema, 'query'), async (req, res) => {
     }).map(rowView);
   }
   const countries = (await query('SELECT DISTINCT country FROM profiles WHERE country IS NOT NULL ORDER BY country')).map((c) => c.country);
-  res.json({ page, pageSize, sort, order, totalAccounts: total, countries, rows });
+  res.json({ page, pageSize, sort, order, totalAccounts: total, totalRows, countries, rows });
 });
 
 function rowView(r) {

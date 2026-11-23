@@ -18,7 +18,9 @@ test('dashboard returns live counts, chart, recent sign-ups and admin activity',
   const r = await api().get('/api/v1/admin/dashboard').set(bearer(token));
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const b = r.body;
-  assert.deepEqual(b.totals, { accounts: 2, adultAccounts: 1, parentAccounts: 1, profiles: 2, childProfiles: 1, newRegistrationsToday: 2, pendingDeletions: 0,
+  const { todayStartsAt, ...counts } = b.totals;
+  assert.match(todayStartsAt, /Z$/);
+  assert.deepEqual(counts, { accounts: 2, adultAccounts: 1, parentAccounts: 1, profiles: 2, childProfiles: 1, newRegistrationsToday: 2, pendingDeletions: 0,
     studentsToVerify: 0, studentsPendingVerification: 0, studentsInterested: 0 });
   assert.equal(b.timeZone, 'Asia/Kolkata', 'default DASHBOARD_TIMEZONE');
   assert.equal(b.ageGroups.length, 9);

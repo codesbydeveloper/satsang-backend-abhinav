@@ -349,10 +349,11 @@ module.exports = {
         { name: 'accountType', in: 'query', schema: str({ enum: ['adult', 'parent', 'child'] }) },
         { name: 'classStatus', in: 'query', schema: str({ enum: ['all', 'verified', 'pending_verification', 'interested', 'not_enrolled'] }) },
         { name: 'studentStatus', in: 'query', schema: str({ example: 'pending_verification,interested' }), description: 'Older filter: one StudentStatus or a comma list of them' },
+        { name: 'joinedSince', in: 'query', schema: str({ format: 'date-time' }), description: 'Accounts created at or after this instant (account rows only); the dashboard sends totals.todayStartsAt' },
         { name: 'sort', in: 'query', schema: str({ enum: ['name', 'username', 'accountType', 'country', 'dob', 'ageGroup', 'email', 'joined'] }), description: 'Default joined' },
         { name: 'order', in: 'query', schema: str({ enum: ['asc', 'desc'] }), description: 'Default desc for joined, asc otherwise' },
         { name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int({ description: 'Families per page (max 100)' }) }],
-      responses: { 200: ok('Page of families', obj({ page: int(), pageSize: int(), sort: str(), order: str(), totalAccounts: int(), countries: { type: 'array', items: str() }, rows: { type: 'array', items: obj({
+      responses: { 200: ok('Page of families', obj({ page: int(), pageSize: int(), sort: str(), order: str(), totalAccounts: int(), totalRows: int({ description: 'Rows matching the filters themselves (greyed parent rows not counted); equals the dashboard card for the same filter' }), countries: { type: 'array', items: str() }, rows: { type: 'array', items: obj({
         accountId: int(), parentAccountId: int({ nullable: true }), profileId: int({ nullable: true }), accountType: str({ enum: ['adult', 'parent', 'child'] }), isChild: bool(),
         name: str({ nullable: true, description: 'Account owner first + last name; null on child rows' }), username: str({ nullable: true }), country: str({ nullable: true }),
         dob: str({ format: 'date', nullable: true }), ageGroup: str({ nullable: true, description: 'Label' }), ageGroupKey: str({ nullable: true }), ageGroupOverridden: bool(),
@@ -396,7 +397,7 @@ module.exports = {
     },
     '/admin/blocked-words/{id}': { delete: op('Admin Moderation', 'Remove a word', { security: admin, parameters: [idParam], responses: { 200: ok('Removed'), ...errors(401, 403, 404) } }) },
 
-    '/admin/dashboard': { get: op('Admin Dashboard', 'Live numbers for the Admin Panel home page (Full Admin). "Today" and chart days are calendar days in DASHBOARD_TIMEZONE (default Asia/Kolkata; returned as timeZone). pendingDeletions = deletion requests with status pending. studentsToVerify = profiles with studentStatus pending_verification + interested (the Users page filter pending_verification,interested). ageGroup is the stored key; label is the display name (same as the app en.json). No emails or DOBs are returned.', {
+    '/admin/dashboard': { get: op('Admin Dashboard', 'Live numbers for the Admin Panel home page (Full Admin). "Today" and chart days are calendar days in DASHBOARD_TIMEZONE (default Asia/Kolkata; returned as timeZone). pendingDeletions = deletion requests with status pending. studentsToVerify = profiles with studentStatus pending_verification + interested (the Users page filter pending_verification,interested). Each card matches GET /admin/users totalRows: adultAccounts ↔ accountType=adult, parentAccounts ↔ accountType=parent, childProfiles ↔ accountType=child, studentsToVerify ↔ studentStatus=pending_verification,interested, newRegistrationsToday (accounts) ↔ joinedSince=todayStartsAt. ageGroup is the stored key; label is the display name (same as the app en.json). No emails or DOBs are returned.', {
       security: admin,
       parameters: [
         { name: 'days', in: 'query', schema: int({ enum: [7, 30], default: 7 }), description: 'New-registrations chart range' },
@@ -405,7 +406,7 @@ module.exports = {
       ],
       responses: { 200: ok('Dashboard', obj({
         generatedAt: str({ format: 'date-time' }), timeZone: str({ example: 'Asia/Kolkata', description: 'DASHBOARD_TIMEZONE' }),
-        totals: obj({ accounts: int(), adultAccounts: int(), parentAccounts: int(), profiles: int(), childProfiles: int(), newRegistrationsToday: int(), pendingDeletions: int(),
+        totals: obj({ accounts: int(), adultAccounts: int(), parentAccounts: int(), profiles: int(), childProfiles: int(), newRegistrationsToday: int(), todayStartsAt: str({ format: 'date-time', description: 'Start of today in timeZone, as UTC' }), pendingDeletions: int(),
           studentsToVerify: int(), studentsPendingVerification: int(), studentsInterested: int() }),
         ageGroups: { type: 'array', items: obj({ ageGroup: ref('AgeGroup'), label: str({ example: 'Yuvaks/Yuvatis A' }), count: int() }) },
         registrations: obj({ days: int(), total: int(), series: { type: 'array', items: obj({ date: str({ format: 'date' }), count: int() }) } }),
