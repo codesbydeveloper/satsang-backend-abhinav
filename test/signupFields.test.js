@@ -98,7 +98,7 @@ test('email verification reserves 100 Sparks once; GET /me shows it to the owner
   assert.deepEqual(pm.body.account.signupBonus, { sparks: 100, status: 'pending' }, 'parent accounts too');
 });
 
-test('name and gender are private: only GET /me and the admin user detail return them', async () => {
+test('name and gender are private: only GET /me and the Admin Panel return them (gender on the detail only)', async () => {
   await register(independent());
   const v = await verify('meera@example.org');
   const login = await api().post('/api/v1/auth/login').send({ email: 'meera@example.org', password: 'Secret123' });
@@ -116,7 +116,9 @@ test('name and gender are private: only GET /me and the admin user detail return
   const admin = await h.adminLogin(await h.makeAdmin('boss@example.org'));
   const list = await api().get('/api/v1/admin/users').set(bearer(admin.token)).query({ q: 'meera' });
   assert.equal(list.status, 200);
-  assert.equal(JSON.stringify(list.body).includes('Patel'), false, 'never in the admin list');
+  // Users table (client 23 Nov 2026): the Full Admin list shows the owner's name; the gender stays on the detail only
+  assert.equal(list.body.rows[0].name, 'Meera Patel');
+  assert.equal(JSON.stringify(list.body).includes('female'), false, 'no gender in the admin list');
   const detail = await api().get(`/api/v1/admin/users/${v.body.account.id}`).set(bearer(admin.token));
   assert.equal(detail.body.account.firstName, 'Meera');
   assert.equal(detail.body.account.lastName, 'Patel');

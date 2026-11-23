@@ -1,5 +1,6 @@
 // OpenAPI 3 description of the Milestone 1 API. Served at /api-docs (Swagger UI) and /api-docs.json
 // (importable into Postman). Keep this file in step with the routes when endpoints change.
+const { AGE_GROUP_KEYS } = require('./utils/ageGroup');
 const json = (schema) => ({ 'application/json': { schema } });
 const body = (schema, required = true) => ({ required, content: json(schema) });
 const ok = (description, schema) => ({ description, ...(schema ? { content: json(schema) } : {}) });
@@ -335,12 +336,28 @@ module.exports = {
     '/admin/admins/{id}/devices/{deviceId}': { delete: op('Admin Management', 'Revoke one trusted device of an admin (Full Admin). 404 DEVICE_NOT_FOUND. Audited as admin.device_revoked { deviceId, reason: full_admin }.', {
       security: admin, parameters: [idParam, { name: 'deviceId', in: 'path', required: true, schema: int() }], responses: { 200: ok('Revoked', obj({ ok: bool(), revoked: bool() })), ...errors(401, 403, 404) } }) },
 
-    '/admin/users': { get: op('Admin Users', 'Search accounts by email or username (Full Admin); one row per profile with its studentStatus', {
-      description: '`studentStatus` keeps only profiles with that status (e.g. `pending_verification` for the enrolment review queue, `interested` for interest confirmations); a comma list (`pending_verification,interested`) keeps profiles with any of them. It combines with `q`. totalAccounts counts the accounts matching both. A row of an account without a profile has studentStatus null.',
-      security: admin, parameters: [{ name: 'q', in: 'query', schema: str() }, { name: 'studentStatus', in: 'query', schema: str({ example: 'pending_verification,interested' }), description: 'One StudentStatus or a comma list of them' },{ name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int() }],
-      responses: { 200: ok('Page of accounts/profiles', obj({ page: int(), pageSize: int(), totalAccounts: int(), rows: { type: 'array', items: obj({
-        accountId: int(), email: str(), accountType: str({ enum: ['adult', 'parent'] }), emailVerified: bool(), createdAt: str(), profileId: int({ nullable: true }), username: str({ nullable: true }),
-        ageGroup: str({ nullable: true }), ageGroupOverridden: bool(), isChild: bool(), studentStatus: { ...ref('StudentStatus'), nullable: true } }) } })), ...errors(400, 401, 403) } }) },
+    '/admin/users': { get: op('Admin Users', 'The Users table (Full Admin): one row per playable profile, grouped by account, with filters and sorting', {
+      description: 'Rows come in families: first the account row (an adult with its own profile, or a parent account, which has no profile: profileId null), then each child profile as its own row (accountType child, parentAccountId set, email = the parent\'s email with isParentEmail true, name null). '
+        + 'Filters (q on name/username/email, country, ageGroup, accountType, classStatus, studentStatus) match single rows; a family is listed when any of its rows matches, its account row always first (matched: false when only a child matched; the panel greys it) and only the matching children after it. '
+        + '`sort` orders families by their account row (empty values last) and children inside a family by the same column. page, pageSize and totalAccounts count families. '
+        + '`classStatus`: verified; pending_verification; interested (+ interest_confirmed); not_enrolled (+ not_asked). The older `studentStatus` (one StudentStatus or a comma list, e.g. `pending_verification,interested`) still works and combines with the rest. '
+        + 'dob (YYYY-MM-DD) is returned here only: Full Admin; the app API never returns an account DOB. `countries` lists every country present on a profile (for the filter dropdown).',
+      security: admin, parameters: [
+        { name: 'q', in: 'query', schema: str(), description: 'Name, username or email (contains, case-insensitive)' },
+        { name: 'country', in: 'query', schema: str({ example: 'IN' }) },
+        { name: 'ageGroup', in: 'query', schema: str({ enum: AGE_GROUP_KEYS }), description: 'Age group key' },
+        { name: 'accountType', in: 'query', schema: str({ enum: ['adult', 'parent', 'child'] }) },
+        { name: 'classStatus', in: 'query', schema: str({ enum: ['all', 'verified', 'pending_verification', 'interested', 'not_enrolled'] }) },
+        { name: 'studentStatus', in: 'query', schema: str({ example: 'pending_verification,interested' }), description: 'Older filter: one StudentStatus or a comma list of them' },
+        { name: 'sort', in: 'query', schema: str({ enum: ['name', 'username', 'accountType', 'country', 'dob', 'ageGroup', 'email', 'joined'] }), description: 'Default joined' },
+        { name: 'order', in: 'query', schema: str({ enum: ['asc', 'desc'] }), description: 'Default desc for joined, asc otherwise' },
+        { name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int({ description: 'Families per page (max 100)' }) }],
+      responses: { 200: ok('Page of families', obj({ page: int(), pageSize: int(), sort: str(), order: str(), totalAccounts: int(), countries: { type: 'array', items: str() }, rows: { type: 'array', items: obj({
+        accountId: int(), parentAccountId: int({ nullable: true }), profileId: int({ nullable: true }), accountType: str({ enum: ['adult', 'parent', 'child'] }), isChild: bool(),
+        name: str({ nullable: true, description: 'Account owner first + last name; null on child rows' }), username: str({ nullable: true }), country: str({ nullable: true }),
+        dob: str({ format: 'date', nullable: true }), ageGroup: str({ nullable: true, description: 'Label' }), ageGroupKey: str({ nullable: true }), ageGroupOverridden: bool(),
+        email: str(), isParentEmail: bool(), studentStatus: { ...ref('StudentStatus'), nullable: true }, emailVerified: bool(),
+        joined: str({ format: 'date-time' }), createdAt: str({ format: 'date-time' }), matched: bool() }) } })), ...errors(400, 401, 403) } }) },
     '/admin/users/{accountId}': { get: op('Admin Users', 'The "View" page: one account with all its profiles (logged in the audit log as user.viewed)', {
       security: admin, parameters: [{ name: 'accountId', in: 'path', required: true, schema: int() }],
       responses: { 200: ok('Account detail', obj({

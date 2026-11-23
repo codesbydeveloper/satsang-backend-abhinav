@@ -237,18 +237,20 @@ test('admin users list: studentStatus per profile and ?studentStatus= filter; de
   assert.equal(byProfile[b.profileId], 'not_asked');
   assert.equal(byProfile[kid2.id], 'interested');
 
+  // matched: the parent account row of a matching child is listed too (greyed, matched: false)
+  const hits = (body) => body.rows.filter((r) => r.matched).map((r) => r.profileId);
   const pending = await api().get('/api/v1/admin/users?studentStatus=pending_verification').set(bearer(token));
-  assert.deepEqual(pending.body.rows.map((r) => r.profileId).sort(), [a.profileId, kid1.id].sort());
+  assert.deepEqual(hits(pending.body).sort(), [a.profileId, kid1.id].sort());
   assert.equal(pending.body.totalAccounts, 2);
   const interested = await api().get('/api/v1/admin/users?studentStatus=interested').set(bearer(token));
-  assert.deepEqual(interested.body.rows.map((r) => r.profileId), [kid2.id]);
+  assert.deepEqual(hits(interested.body), [kid2.id]);
   const withQ = await api().get('/api/v1/admin/users?studentStatus=pending_verification&q=kid_').set(bearer(token));
-  assert.deepEqual(withQ.body.rows.map((r) => r.profileId), [kid1.id]);
+  assert.deepEqual(hits(withQ.body), [kid1.id]);
   assert.equal((await api().get('/api/v1/admin/users?studentStatus=bogus').set(bearer(token))).status, 400);
   // comma list: the dashboard's "Students to verify" (pending + interested)
   const toVerify = await api().get('/api/v1/admin/users?studentStatus=pending_verification,interested').set(bearer(token));
   assert.equal(toVerify.status, 200);
-  assert.deepEqual(toVerify.body.rows.map((r) => r.profileId).sort(), [a.profileId, kid1.id, kid2.id].sort());
+  assert.deepEqual(hits(toVerify.body).sort(), [a.profileId, kid1.id, kid2.id].sort());
   assert.equal(toVerify.body.totalAccounts, 2);
   assert.equal((await api().get('/api/v1/admin/users?studentStatus=interested,bogus').set(bearer(token))).status, 400);
   assert.equal((await api().get('/api/v1/admin/users?studentStatus=,').set(bearer(token))).status, 400);

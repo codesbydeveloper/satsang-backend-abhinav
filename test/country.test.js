@@ -93,7 +93,7 @@ test('child profiles: country set in POST /profiles; changed by the parent (pare
   assert.equal(withPin.body.profile.country, 'NZ');
 });
 
-test('the country is private: not in the username check or the Admin Panel user list / detail', async () => {
+test('the country is private: not in the username check or the user detail; only the Full Admin Users table shows it', async () => {
   const u = await h.adultLogin('ravi@example.org', 'ravi_k');
   await api().patch('/api/v1/me/settings').set(bearer(u.accessToken)).send({ country: 'KE' });
   const check = await api().get('/api/v1/usernames/check').query({ username: 'ravi_k' });
@@ -101,7 +101,10 @@ test('the country is private: not in the username check or the Admin Panel user 
   const boss = await h.makeAdmin('boss@example.org'); const b = await h.adminLogin(boss);
   const list = await api().get('/api/v1/admin/users').set(bearer(b.token)).query({ q: 'ravi' });
   const detail = await api().get(`/api/v1/admin/users/${u.account.id}`).set(bearer(b.token));
-  for (const body of [list.body, detail.body]) {
+  // Users table (client 23 Nov 2026): Full Admin only, one Country column per profile
+  assert.equal(list.body.rows[0].country, 'KE');
+  assert.deepEqual(list.body.countries, ['KE']);
+  for (const body of [detail.body]) {
     assert.equal(JSON.stringify(body).includes('country'), false);
     assert.equal(JSON.stringify(body).includes('"KE"'), false);
   }
