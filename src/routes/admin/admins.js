@@ -9,6 +9,7 @@ const S = require('../../utils/schemas');
 const { badRequest, notFound, conflict } = require('../../utils/errors');
 const { audit } = require('../../utils/audit');
 const { newInvite, emailInvite, adminStatus } = require('../../utils/adminInvites');
+const { listDevices, revokeDevice, revokeAllDevices, endAdminAccess } = require('../../utils/adminSessions');
 
 const router = express.Router();
 router.use(requireAdmin, requireRole('full_admin'));
@@ -33,17 +34,30 @@ async function target(req) {
 async function otherActiveFullAdmins(excludeId) {
   return (await query("SELECT COUNT(*) AS n FROM admins WHERE role = 'full_admin' AND is_active = 1 AND id <> ?", [excludeId]))[0].n;
 }
+/** Full Admins that count towards MAX_FULL_ADMINS: active ones and invited ones (deactivated ones do not). */
+async function countedFullAdmins(excludeId = 0) {
+  return (await query("SELECT COUNT(*) AS n FROM admins WHERE role = 'full_admin' AND (is_active = 1 OR password_hash IS NULL) AND id <> ?", [excludeId]))[0].n;
+}
+async function assertFullAdminRoom(excludeId = 0) {
+  if ((await countedFullAdmins(excludeId)) >= config.maxFullAdmins) {
+    throw conflict('FULL_ADMIN_LIMIT', `There can be at most ${config.maxFullAdmins} Full Admins (active and invited). Make this admin a Content Editor, or change or deactivate another Full Admin first.`);
+  }
+}
 const assertInvited = (a) => { if (adminStatus(a) !== 'invited') throw conflict('ADMIN_NOT_INVITED', 'This admin has already accepted their invite'); };
 const assertNotInvited = (a) => { if (adminStatus(a) === 'invited') throw conflict('ADMIN_INVITED', 'This admin has not accepted their invite yet. Resend or cancel the invite instead.'); };
 
 router.get('/', async (_req, res) => {
-  res.json({ admins: (await query('SELECT * FROM admins ORDER BY id')).map(view) });
+  res.json({
+    admins: (await query('SELECT * FROM admins ORDER BY id')).map(view),
+    fullAdminLimit: { max: config.maxFullAdmins, used: await countedFullAdmins() },
+  });
 });
 
 // Invite a new admin: created as "invited" (no password, not active) and emailed a 48-hour link to choose a password.
 router.post('/', validate(z.object({ email: S.email, name: z.string().trim().min(1).max(100), role: ROLES })), async (req, res) => {
   const b = req.body;
   if ((await query('SELECT 1 FROM admins WHERE email = ?', [b.email])).length) throw conflict('ADMIN_EXISTS', 'An admin with this email already exists');
+  if (b.role === 'full_admin') await assertFullAdminRoom();
   const inv = newInvite();
   const r = await query(
     'INSERT INTO admins (email, name, password_hash, role, is_active, invite_token_hash, invite_expires_at, invited_by, invited_at) VALUES (?,?,NULL,?,0,?,?,?, UTC_TIMESTAMP())',
@@ -96,6 +110,11 @@ router.patch('/:id', validate(idParam, 'params'), validate(z.object({
   if (losesFullAdmin && (await otherActiveFullAdmins(a.id)) === 0) throw conflict('LAST_FULL_ADMIN', 'At least one active Full Admin must remain');
   if (self && activeChanges && !active) throw badRequest('CANNOT_DEACTIVATE_SELF', 'You cannot deactivate your own account');
   if (self && roleChanges) throw badRequest('CANNOT_DEMOTE_SELF', 'You cannot change your own role');
+  // becoming (or coming back as) a counted Full Admin: promotion, or reactivating a deactivated Full Admin
+  const finalRole = roleChanges ? role : a.role;
+  const countedBefore = a.role === 'full_admin' && (a.is_active || a.password_hash == null);
+  const countedAfter = finalRole === 'full_admin' && ((activeChanges ? active : !!a.is_active) || a.password_hash == null);
+  if (countedAfter && !countedBefore) await assertFullAdminRoom(a.id);
 
   const sets = []; const vals = [];
   if (name !== undefined && name !== a.name) { sets.push('name = ?'); vals.push(name); }
@@ -106,6 +125,8 @@ router.patch('/:id', validate(idParam, 'params'), validate(z.object({
   }
   if (roleChanges || (activeChanges && !active)) sets.push('token_version = token_version + 1');   // end their sessions
   if (sets.length) await query(`UPDATE admins SET ${sets.join(', ')} WHERE id = ?`, [...vals, a.id]);
+  // role change or deactivation: refresh tokens and every trusted device go too (next login needs the emailed code)
+  if (roleChanges || (activeChanges && !active)) await endAdminAccess(req, a.id, roleChanges ? 'role_changed' : 'deactivated');
 
   const entity = { entityType: 'admin', entityId: a.id };
   if (name !== undefined && name !== a.name) await audit(req, 'admin.updated', { ...entity, details: { name } });
@@ -120,8 +141,28 @@ router.post('/:id/reset-password', validate(idParam, 'params'), validate(z.objec
   assertNotInvited(a);
   await query('UPDATE admins SET password_hash = ?, token_version = token_version + 1, failed_attempts = 0, locked_until = NULL WHERE id = ?',
     [await bcrypt.hash(req.body.newPassword, config.bcryptRounds), a.id]);
+  await endAdminAccess(req, a.id, 'password_reset');
   await audit(req, 'admin.password_reset', { entityType: 'admin', entityId: a.id });
   res.json({ ok: true });
+});
+
+// Another admin's trusted devices (Full Admin).
+router.get('/:id/devices', validate(idParam, 'params'), async (req, res) => {
+  const a = await target(req);
+  res.json({ devices: await listDevices(a.id) });
+});
+
+// Revoke all of an admin's trusted devices (Full Admin): their next login needs the emailed code.
+router.delete('/:id/devices', validate(idParam, 'params'), async (req, res) => {
+  const a = await target(req);
+  res.json({ ok: true, revoked: await revokeAllDevices(req, a.id, 'full_admin') });
+});
+
+// Revoke one of an admin's trusted devices (Full Admin).
+router.delete('/:id/devices/:deviceId', validate(z.object({ id: z.coerce.number().int().positive(), deviceId: z.coerce.number().int().positive() }), 'params'), async (req, res) => {
+  const a = await target(req);
+  if (!(await revokeDevice(req, a.id, req.validated.params.deviceId, 'full_admin'))) throw notFound('DEVICE_NOT_FOUND', 'Trusted device not found');
+  res.json({ ok: true, revoked: true });
 });
 
 module.exports = router;

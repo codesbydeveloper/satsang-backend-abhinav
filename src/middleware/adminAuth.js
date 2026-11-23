@@ -8,8 +8,8 @@ const { unauthorized, forbidden } = require('../utils/errors');
  * that row's used_at makes it single use. Only accepted by /admin/auth/verify-otp and /admin/auth/resend-otp.
  */
 const CHALLENGE_MINUTES = 10;
-const signChallengeToken = (admin, challengeId) =>
-  jwt.sign({ scope: 'login_otp', cid: challengeId, tv: admin.token_version }, config.adminJwtSecret,
+const signChallengeToken = (admin, challengeId, rememberMe = false) =>
+  jwt.sign({ scope: 'login_otp', cid: challengeId, tv: admin.token_version, rm: !!rememberMe }, config.adminJwtSecret,
     { subject: String(admin.id), expiresIn: `${CHALLENGE_MINUTES}m`, audience: 'admin-challenge' });
 
 const signAdminToken = (admin) =>
@@ -29,7 +29,7 @@ async function loadAdmin(token, audience, scope, invalidCode = 'TOKEN_INVALID', 
 async function loadChallenge(challengeToken) {
   const { admin, payload } = await loadAdmin(String(challengeToken || ''), 'admin-challenge', 'login_otp',
     'CHALLENGE_INVALID', 'This login has expired. Please log in again.');
-  return { admin, challengeId: payload.cid };
+  return { admin, challengeId: payload.cid, rememberMe: payload.rm === true };
 }
 
 const bearer = (req) => {

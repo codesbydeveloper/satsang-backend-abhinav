@@ -42,6 +42,7 @@ function createApp() {
   api.use('/profiles', require('./routes/profiles'));
   api.use('/parent', require('./routes/parent'));
   api.use('/admin/auth', require('./routes/admin/auth'));
+  api.use('/admin/me', require('./routes/admin/me'));
   api.use('/admin/admins', require('./routes/admin/admins'));
   api.use('/admin/users', require('./routes/admin/users'));
   api.use('/admin/profiles', require('./routes/admin/profiles'));

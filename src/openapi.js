@@ -27,7 +27,7 @@ module.exports = {
       '',
       '**Conventions:** all paths are under `/api/v1`. Errors look like `{ "error": { "code", "message", "details?" } }`. Dates of birth are `YYYY-MM-DD` and are never returned for other users. Timestamps are stored in UTC and returned as ISO 8601 UTC strings ending in `Z` (e.g. `2026-11-19T12:02:37.000Z`); clients show them in the viewer’s local time. Server time is authoritative; game days use America/New_York.',
       '',
-      '**Users:** log in, then send `Authorization: Bearer <accessToken>`. Renew with `/auth/refresh`. **Admins:** two steps — `/admin/auth/login` (email + password; a 6-digit code is emailed and a `challengeToken` returned) → `/admin/auth/verify-otp` (`challengeToken` + code) → send the returned token as `Authorization: Bearer`. `/admin/auth/resend-otp` sends a new code.',
+      '**Users:** log in, then send `Authorization: Bearer <accessToken>`. Renew with `/auth/refresh`. **Admins:** two steps — `/admin/auth/login` (email + password; a 6-digit code is emailed and a `challengeToken` returned) → `/admin/auth/verify-otp` (`challengeToken` + code) → send the returned token as `Authorization: Bearer`. `/admin/auth/resend-otp` sends a new code. **Trusted devices:** `verify-otp` with `trustDevice: true` returns a `deviceToken` (once); send it as `deviceToken` on later `/admin/auth/login` calls from that browser and the login completes with the password only (`step: "done"`). **Remember me:** `rememberMe: true` on login returns a 30-day rolling `refreshToken`; renew the admin token with `/admin/auth/refresh`.',
     ].join('\n'),
   },
   servers: [{ url: '/api/v1' }],
@@ -79,6 +79,18 @@ module.exports = {
       },
       AuthResponse: obj({ accessToken: str(), refreshToken: str(), account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) }),
       Admin: obj({ id: int(), email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }) }),
+      TrustedDevice: obj({
+        id: int(), label: str({ example: 'Chrome on Windows', description: 'Browser and OS from the user agent when the device was trusted' }),
+        createdAt: str({ format: 'date-time' }), lastUsedAt: str({ format: 'date-time', nullable: true }),
+      }),
+      AdminLoginDone: obj({
+        step: str({ enum: ['done'] }), token: str({ description: 'Admin token (ADMIN_TOKEN_TTL, default 8 h)' }), admin: ref('Admin'),
+        rememberMe: bool(),
+        refreshToken: str({ nullable: true, description: 'Only when rememberMe was true: 30-day rolling refresh token for POST /admin/auth/refresh. Store it in the panel (it cannot be an httpOnly cookie cross-site); null otherwise.' }),
+        refreshExpiresAt: str({ format: 'date-time', nullable: true }),
+        deviceToken: str({ description: 'Only from verify-otp with trustDevice: true. Long, URL-safe; returned once, only its hash is stored. Send it as deviceToken on later logins from this browser.' }),
+        device: { ...ref('TrustedDevice'), description: 'The trusted device used (login) or just created (verify-otp with trustDevice).' },
+      }, ['step', 'token', 'admin', 'rememberMe']),
       ManagedAdmin: obj({
         id: int(), email: str(), name: str(), role: str({ enum: ['full_admin', 'content_editor'] }),
         status: str({ enum: ['active', 'invited', 'inactive'], description: 'invited = has not accepted the email invite yet (cannot log in); inactive = deactivated (cannot log in, tokens revoked)' }),
@@ -275,12 +287,12 @@ module.exports = {
     '/parent/report': { get: op('Parent PIN', 'Parent report: daily time and activity per child (parent mode only); each child also carries studentStatus and studentSparksReserved', {
       security: user, parameters: [{ name: 'profileId', in: 'query', schema: int() }, { name: 'days', in: 'query', schema: int({ minimum: 1, maximum: 90, default: 7 }) }], responses: { 200: ok('Report'), ...errors(401, 403, 404) } }) },
 
-    '/admin/auth/login': { post: op('Admin Auth', 'Step 1: email + password. If correct (and the admin is active), a 6-digit code is emailed ("Your Satsang Spark admin login code", valid 10 minutes) and a single-use challenge token (10 minutes) is returned. No admin token yet. Wrong email or password: the same 401 INVALID_CREDENTIALS. 5 failures (password or code) lock the admin for 15 minutes: 429 ADMIN_LOCKED.', {
-      requestBody: body(obj({ email: str(), password: str() }, ['email', 'password'])),
-      responses: { 200: ok('Code emailed', obj({ step: str({ enum: ['email_otp'] }), challengeToken: str(), expiresInSeconds: int({ example: 600 }), resendAfterSeconds: int({ example: 60 }) })), ...errors(400, 401, 429), 503: { description: 'EMAIL_FAILED: the code could not be sent', content: json(ref('Error')) } } }) },
-    '/admin/auth/verify-otp': { post: op('Admin Auth', 'Step 2: the emailed code. Correct → the admin token (the challenge is used up). Errors: 401 OTP_INVALID (details.attemptsLeft), 401 OTP_EXPIRED (request a new code or log in again), 429 OTP_LOCKED after 5 wrong tries (log in again), 401 CHALLENGE_INVALID (used, replaced by a newer login, or expired), 429 ADMIN_LOCKED.', {
-      requestBody: body(obj({ challengeToken: str(), code: str({ pattern: '^\\d{6}$', example: '123456' }) }, ['challengeToken', 'code'])),
-      responses: { 200: ok('Logged in', obj({ token: str(), admin: ref('Admin') })), ...errors(400, 401, 429) } }) },
+    '/admin/auth/login': { post: op('Admin Auth', 'Step 1: email + password. With a deviceToken of one of this admin’s live trusted devices → logged in at once (step "done", no code; audited as admin.login_success { method: trusted_device }). Otherwise a 6-digit code is emailed ("Your Satsang Spark admin login code", valid 10 minutes) and a single-use challenge token (10 minutes) is returned (step "email_otp"); deviceTokenInvalid: true when a deviceToken was sent but is not trusted (any more), so the panel can forget it. rememberMe (default false) is carried to verify-otp. Every completed sign-in emails all active Full Admins "Satsang Spark Admin – new sign-in" in the background (at most once per admin per 10 minutes). Wrong email or password: the same 401 INVALID_CREDENTIALS. 5 failures (password or code) lock the admin for 15 minutes: 429 ADMIN_LOCKED.', {
+      requestBody: body(obj({ email: str(), password: str(), deviceToken: str({ description: 'From an earlier verify-otp with trustDevice: true' }), rememberMe: bool() }, ['email', 'password'])),
+      responses: { 200: ok('Code emailed (step email_otp) or logged in on a trusted device (step done)', { oneOf: [obj({ step: str({ enum: ['email_otp'] }), challengeToken: str(), expiresInSeconds: int({ example: 600 }), resendAfterSeconds: int({ example: 60 }), deviceTokenInvalid: bool() }), ref('AdminLoginDone')] }), ...errors(400, 401, 429), 503: { description: 'EMAIL_FAILED: the code could not be sent', content: json(ref('Error')) } } }) },
+    '/admin/auth/verify-otp': { post: op('Admin Auth', 'Step 2: the emailed code. Correct → the admin token (the challenge is used up), plus a refreshToken if rememberMe was true on login. trustDevice: true → this browser becomes a trusted device (max 10 per admin; the oldest is revoked) and a new deviceToken is returned once (audited as admin.device_trusted). Audited as admin.login_success { method: otp }. Errors: 401 OTP_INVALID (details.attemptsLeft), 401 OTP_EXPIRED (request a new code or log in again), 429 OTP_LOCKED after 5 wrong tries (log in again), 401 CHALLENGE_INVALID (used, replaced by a newer login, or expired), 429 ADMIN_LOCKED.', {
+      requestBody: body(obj({ challengeToken: str(), code: str({ pattern: '^\\d{6}$', example: '123456' }), trustDevice: bool() }, ['challengeToken', 'code'])),
+      responses: { 200: ok('Logged in', ref('AdminLoginDone')), ...errors(400, 401, 429) } }) },
     '/admin/auth/resend-otp': { post: op('Admin Auth', 'Email a new code for the same login; the previous code stops working and the 5 tries start again. At most once per 60 seconds (429 RESEND_TOO_SOON, details.retryAfterSeconds) and 5 times per login (429 RESEND_LIMIT). Not after OTP_LOCKED.', {
       requestBody: body(obj({ challengeToken: str() }, ['challengeToken'])),
       responses: { 200: ok('New code emailed', obj({ sent: bool(), expiresInSeconds: int({ example: 600 }), resendAfterSeconds: int({ example: 60 }), resendsLeft: int() })), ...errors(400, 401, 429), 503: { description: 'EMAIL_FAILED', content: json(ref('Error')) } } }) },
@@ -290,25 +302,38 @@ module.exports = {
       requestBody: body(obj({ token: str(), password: str({ description: '12–72 chars' }) }, ['token', 'password'])),
       responses: { 200: ok('Accepted', obj({ ok: bool(), email: str(), message: str() })), ...errors(400, 404), 410: { description: 'INVITE_EXPIRED', content: json(ref('Error')) } } }) },
     '/admin/auth/me': { get: op('Admin Auth', 'Who am I', { security: admin, responses: { 200: ok('Admin', obj({ admin: ref('Admin') })), ...errors(401) } }) },
-    '/admin/auth/logout': { post: op('Admin Auth', 'End all of this admin’s sessions', { security: admin, responses: { 200: ok('ok'), ...errors(401) } }) },
-    '/admin/auth/change-password': { post: op('Admin Auth', 'Change own password (12+ chars); sessions end', {
+    '/admin/auth/refresh': { post: op('Admin Auth', '"Remember me": a new admin token for a refresh token. The refresh token rotates (the old one stops working) and its 30 days start again. Not a new sign-in (no alert email, no audit entry). 401 REFRESH_INVALID when unknown, already used, expired, or after logout / password change / reset / role change / deactivation.', {
+      requestBody: body(obj({ refreshToken: str() }, ['refreshToken'])),
+      responses: { 200: ok('New tokens', obj({ token: str(), admin: ref('Admin'), refreshToken: str(), refreshExpiresAt: str({ format: 'date-time' }) })), ...errors(400, 401, 429) } }) },
+    '/admin/auth/logout': { post: op('Admin Auth', 'End all of this admin’s sessions and revoke their refresh tokens. Trusted devices stay trusted.', { security: admin, responses: { 200: ok('ok'), ...errors(401) } }) },
+    '/admin/auth/change-password': { post: op('Admin Auth', 'Change own password (12+ chars); sessions end, refresh tokens and every trusted device are revoked', {
       security: admin, requestBody: body(obj({ currentPassword: str(), newPassword: str() }, ['currentPassword', 'newPassword'])), responses: { 200: ok('ok'), ...errors(400, 401) } }) },
 
+    '/admin/me/devices': { get: op('Admin Auth', 'Your own trusted devices (any role), newest first. Revoked ones are not listed.', { security: admin, responses: { 200: ok('Devices', obj({ devices: { type: 'array', items: ref('TrustedDevice') } })), ...errors(401) } }) },
+    '/admin/me/devices/{id}': { delete: op('Admin Auth', 'Revoke one of your own trusted devices (its next login needs the emailed code). 404 DEVICE_NOT_FOUND if not yours or already revoked. Audited as admin.device_revoked { deviceId, reason: self }.', { security: admin, parameters: [idParam], responses: { 200: ok('Revoked', obj({ ok: bool(), revoked: bool() })), ...errors(401, 404) } }) },
+
     '/admin/admins': {
-      get: op('Admin Management', 'List admins (Full Admin) with status active / invited / inactive', { security: admin, responses: { 200: ok('Admins', obj({ admins: { type: 'array', items: ref('ManagedAdmin') } })), ...errors(401, 403) } }),
-      post: op('Admin Management', 'Invite an admin (Full Admin). Creates them as `invited` (no password, cannot log in) and emails "You\'ve been invited to the Satsang Spark Admin Panel" with a link `<ADMIN_PANEL_URL>/accept-invite?token=…` valid 48 hours. 409 ADMIN_EXISTS if any admin (active, invited or inactive) has this email; 503 EMAIL_FAILED if the email cannot be sent (nothing is created). Audited as admin.invited.', {
+      get: op('Admin Management', 'List admins (Full Admin) with status active / invited / inactive. fullAdminLimit: max = MAX_FULL_ADMINS (default 3), used = active + invited Full Admins.', { security: admin, responses: { 200: ok('Admins', obj({ admins: { type: 'array', items: ref('ManagedAdmin') }, fullAdminLimit: obj({ max: int({ example: 3 }), used: int() }) })), ...errors(401, 403) } }),
+      post: op('Admin Management', 'Invite an admin (Full Admin). Creates them as `invited` (no password, cannot log in) and emails "You\'ve been invited to the Satsang Spark Admin Panel" with a link `<ADMIN_PANEL_URL>/accept-invite?token=…` valid 48 hours. 409 ADMIN_EXISTS if any admin (active, invited or inactive) has this email; 409 FULL_ADMIN_LIMIT when inviting a Full Admin beyond MAX_FULL_ADMINS (active + invited count); 503 EMAIL_FAILED if the email cannot be sent (nothing is created). Audited as admin.invited.', {
         security: admin, requestBody: body(obj({ email: str({ format: 'email' }), name: str({ description: '1–100 chars; used in the email' }), role: str({ enum: ['full_admin', 'content_editor'] }) }, ['email', 'name', 'role'])), responses: { 201: ok('Invited', obj({ admin: ref('ManagedAdmin') })), ...errors(400, 401, 403, 409) } }),
     },
     '/admin/admins/{id}': {
-      patch: op('Admin Management', 'Rename, change role, deactivate (`active: false`) or reactivate (`active: true`). Role change or deactivation ends their sessions. You cannot change your own role (400 CANNOT_DEMOTE_SELF) or deactivate yourself (400 CANNOT_DEACTIVATE_SELF); at least one active Full Admin must remain (409 LAST_FULL_ADMIN). `active` on an invited admin: 409 ADMIN_INVITED. Audited as admin.role_changed { from, to }, admin.deactivated, admin.reactivated. `isActive` is accepted as an older name for `active`.', {
+      patch: op('Admin Management', 'Rename, change role, deactivate (`active: false`) or reactivate (`active: true`). Role change or deactivation ends their sessions. You cannot change your own role (400 CANNOT_DEMOTE_SELF) or deactivate yourself (400 CANNOT_DEACTIVATE_SELF); at least one active Full Admin must remain (409 LAST_FULL_ADMIN); promoting to Full Admin or reactivating a deactivated Full Admin beyond MAX_FULL_ADMINS: 409 FULL_ADMIN_LIMIT. Role change or deactivation also revokes their refresh tokens and every trusted device. `active` on an invited admin: 409 ADMIN_INVITED. Audited as admin.role_changed { from, to }, admin.deactivated, admin.reactivated. `isActive` is accepted as an older name for `active`.', {
         security: admin, parameters: [idParam], requestBody: body(obj({ name: str(), role: str({ enum: ['full_admin', 'content_editor'] }), active: bool() }), false), responses: { 200: ok('Updated', obj({ admin: ref('ManagedAdmin') })), ...errors(400, 401, 403, 404, 409) } }),
       delete: op('Admin Management', 'Cancel an invite: removes an admin who never accepted it (the link stops working). 409 ADMIN_NOT_INVITED for an admin who has accepted (deactivate them instead). Audited as admin.invite_cancelled.', {
         security: admin, parameters: [idParam], responses: { 200: ok('Cancelled', obj({ ok: bool(), cancelled: bool() })), ...errors(401, 403, 404, 409) } }),
     },
     '/admin/admins/{id}/resend-invite': { post: op('Admin Management', 'Email a new 48-hour invite link (the old link stops working). Only for invited admins (409 ADMIN_NOT_INVITED otherwise); 503 EMAIL_FAILED if the email cannot be sent. Audited as admin.invite_resent.', {
       security: admin, parameters: [idParam], responses: { 200: ok('Resent', obj({ admin: ref('ManagedAdmin') })), ...errors(401, 403, 404, 409) } }) },
-    '/admin/admins/{id}/reset-password': { post: op('Admin Management', 'Emergency: set a new password for an admin who has accepted their invite (sessions end). 409 ADMIN_INVITED for an invited admin.', {
+    '/admin/admins/{id}/reset-password': { post: op('Admin Management', 'Emergency: set a new password for an admin who has accepted their invite (sessions end; refresh tokens and trusted devices revoked). 409 ADMIN_INVITED for an invited admin.', {
       security: admin, parameters: [idParam], requestBody: body(obj({ newPassword: str({ description: '12–72 chars' }) }, ['newPassword'])), responses: { 200: ok('ok'), ...errors(400, 401, 403, 404, 409) } }) },
+
+    '/admin/admins/{id}/devices': {
+      get: op('Admin Management', 'An admin’s trusted devices (Full Admin)', { security: admin, parameters: [idParam], responses: { 200: ok('Devices', obj({ devices: { type: 'array', items: ref('TrustedDevice') } })), ...errors(401, 403, 404) } }),
+      delete: op('Admin Management', 'Revoke all of an admin’s trusted devices (Full Admin); revoked = how many. Audited as admin.device_revoked { all: true, count, reason: full_admin }.', { security: admin, parameters: [idParam], responses: { 200: ok('Revoked', obj({ ok: bool(), revoked: int() })), ...errors(401, 403, 404) } }),
+    },
+    '/admin/admins/{id}/devices/{deviceId}': { delete: op('Admin Management', 'Revoke one trusted device of an admin (Full Admin). 404 DEVICE_NOT_FOUND. Audited as admin.device_revoked { deviceId, reason: full_admin }.', {
+      security: admin, parameters: [idParam, { name: 'deviceId', in: 'path', required: true, schema: int() }], responses: { 200: ok('Revoked', obj({ ok: bool(), revoked: bool() })), ...errors(401, 403, 404) } }) },
 
     '/admin/users': { get: op('Admin Users', 'Search accounts by email or username (Full Admin); one row per profile with its studentStatus', {
       description: '`studentStatus` keeps only profiles with that status (e.g. `pending_verification` for the enrolment review queue, `interested` for interest confirmations); a comma list (`pending_verification,interested`) keeps profiles with any of them. It combines with `q`. totalAccounts counts the accounts matching both. A row of an account without a profile has studentStatus null.',

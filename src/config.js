@@ -20,6 +20,10 @@ const config = {
   accessTokenTtl: process.env.ACCESS_TOKEN_TTL || '1h',
   refreshTokenDays: Number(process.env.REFRESH_TOKEN_DAYS || 60),
   adminTokenTtl: process.env.ADMIN_TOKEN_TTL || '8h',
+  // Admin "Remember me": refresh token lifetime in days (rolling: each refresh restarts it).
+  adminRefreshDays: Number(process.env.ADMIN_REFRESH_DAYS || 30),
+  // At most this many Full Admins (active + invited). Everyone else is a Content Editor.
+  maxFullAdmins: Number(process.env.MAX_FULL_ADMINS || 3),
   // How long a deleted account's email stays on its deletion request (Full Admins only), then it is erased.
   retainedEmailDays: Number(process.env.RETAINED_EMAIL_DAYS || 30),
   // Time zone for the Admin Panel dashboard ("new registrations today" and the chart days). IANA name.
@@ -51,6 +55,9 @@ try { new Intl.DateTimeFormat('en', { timeZone: config.dashboardTimeZone }); } c
   throw new Error(`DASHBOARD_TIMEZONE "${config.dashboardTimeZone}" is not a valid IANA time zone (e.g. Asia/Kolkata)`);
 }
 
+for (const [name, v, min, max] of [['MAX_FULL_ADMINS', config.maxFullAdmins, 1, 100], ['ADMIN_REFRESH_DAYS', config.adminRefreshDays, 1, 365]]) {
+  if (!Number.isInteger(v) || v < min || v > max) throw new Error(`${name} must be a whole number from ${min} to ${max}`);
+}
 for (const [name, v] of [['STUDENT_VERIFIED_SPARKS', config.studentVerifiedSparks], ['STUDENT_INTEREST_SPARKS', config.studentInterestSparks]]) {
   if (!Number.isInteger(v) || v < 0 || v > 100000) throw new Error(`${name} must be a whole number from 0 to 100000`);
 }
