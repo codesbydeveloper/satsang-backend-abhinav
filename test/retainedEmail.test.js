@@ -22,7 +22,8 @@ test('deleting in the app emails the owner a confirmation (text + html, no perso
   const mails = deletedMails('ravi@example.org');
   assert.equal(mails.length, 1);
   assert.match(mails[0].text, /Your account has been successfully removed\. Everything linked to it has been deleted and you have been logged out on every device\. Thank you for being part of Satsang Spark\./);
-  assert.match(mails[0].html, /<p>Your account has been successfully removed\./);
+  assert.match(mails[0].html, /^<!doctype html>/);
+  assert.match(mails[0].html, /<p[^>]*>Your account has been successfully removed\./);
   assert.ok(!/ravi_k|Ravi|Kumar/.test(mails[0].text + mails[0].html), 'no username or name in the email');
 });
 

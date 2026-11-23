@@ -39,7 +39,8 @@ test('login emails a code; the admin token only comes after the correct code', a
   assert.equal(mail.subject, 'Your Satsang Spark admin login code');
   const code = h.lastAdminCode(a.email);
   assert.equal(mail.text, `Your login code is ${code}. It expires in 10 minutes. If you didn't try to log in, change your password.`);
-  assert.equal(mail.html, undefined);
+  assert.match(mail.html, /^<!doctype html>/);                  // the shared branded layout
+  assert.ok(mail.html.includes(`>${code}</p>`));
   assert.ok(!JSON.stringify(l.body).includes(code));
 
   // only a hash is stored, with a 10-minute expiry and attempts = 0
