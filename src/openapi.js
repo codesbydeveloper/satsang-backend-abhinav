@@ -341,7 +341,8 @@ module.exports = {
       security: admin, parameters: [idParam, { name: 'deviceId', in: 'path', required: true, schema: int() }], responses: { 200: ok('Revoked', obj({ ok: bool(), revoked: bool() })), ...errors(401, 403, 404) } }) },
 
     '/admin/users': { get: op('Admin Users', 'The Users table (Full Admin): one row per playable profile, grouped by account, with filters and sorting', {
-      description: 'Rows come in families: first the account row (an adult with its own profile, or a parent account, which has no profile: profileId null), then each child profile as its own row (accountType child, parentAccountId set, email = the parent\'s email with isParentEmail true, name null). '
+      description: 'View only: there is no POST here; app accounts are created only in the app. '
+        + 'Rows come in families: first the account row (an adult with its own profile, or a parent account, which has no profile: profileId null), then each child profile as its own row (accountType child, parentAccountId set, email = the parent\'s email with isParentEmail true, name null). '
         + 'Filters (q on name/username/email, country, ageGroup, accountType, classStatus, studentStatus) match single rows; a family is listed when any of its rows matches, its account row always first (matched: false when only a child matched; the panel greys it) and only the matching children after it. '
         + '`sort` orders families by their account row (empty values last) and children inside a family by the same column. page, pageSize and totalAccounts count families. '
         + '`classStatus`: verified; pending_verification; interested (+ interest_confirmed); not_enrolled (+ not_asked). The older `studentStatus` (one StudentStatus or a comma list, e.g. `pending_verification,interested`) still works and combines with the rest. '

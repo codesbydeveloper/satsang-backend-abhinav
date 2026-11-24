@@ -11,6 +11,7 @@ const { filterSchema, listSchema, queryUsers, toCsv, localDateTime } = require('
 
 const router = express.Router();
 router.use(requireAdmin, requireRole('full_admin'));   // user data is Full Admin only
+// View only (client, 24 Nov 2026): there is no POST / here. App accounts are created only in the app (POST /auth/register).
 
 // GET / and GET /export.csv share the Users table logic (filters, family grouping, sort): src/utils/usersTable.js.
 router.get('/', validate(listSchema, 'query'), async (req, res) => {

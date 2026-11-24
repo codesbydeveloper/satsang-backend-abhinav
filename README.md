@@ -59,6 +59,7 @@ test/               automated tests
 
 ## How the main pieces work
 - **Accounts vs profiles.** An *adult/independent* account has one playable profile (its own). A *parent* account has no profile of its own and creates child profiles. Everything a player owns later (Sparks, streak, Daily Spin, scores, progress, Dress Up items, Shangars) hangs off the **profile**, as agreed in the contract; the referral link/code stays on the account.
+- **Admin Users is view only.** The Admin Panel cannot create app accounts: there is no `POST /admin/users` (it returns 404). Accounts are created only in the app. Admins are invited with `POST /admin/admins`.
 - **Sessions.** Login returns a 1-hour access token and a 60-day refresh token. Refresh tokens rotate on every use. A device session remembers which profile is active, so a child never falls back into parent mode on refresh. Logout, password change and password reset end sessions immediately.
 - **Parent mode.** A parent logs in "in parent mode". Switching to a child (`POST /profiles/:id/switch`) and coming back (`POST /profiles/parent-mode`) both need the 4-digit Parent PIN. Five wrong PINs lock it for 15 minutes; resetting it with the account password clears the lock.
 - **Dashboard time zone:** `DASHBOARD_TIMEZONE` (IANA name, default `Asia/Kolkata`) sets the day used by the Admin Panel dashboard ("new registrations today", chart days); it is sent as `timeZone` and shown on the card. An invalid name stops the server at start. The game day (streaks, daily challenges, leaderboards) stays America/New_York.

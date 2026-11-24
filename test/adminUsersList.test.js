@@ -169,3 +169,14 @@ test('bad parameters are 400', async () => {
     assert.equal((await api().get('/api/v1/admin/users').set(bearer(s.token)).query(q)).status, 400, JSON.stringify(q));
   }
 });
+
+test('Users is view only: POST /admin/users (create an app user) is not available (404), nothing is created', async () => {
+  const token = (await h.adminLogin(await h.makeAdmin('boss@example.org'))).token;
+  const before = (await h.query('SELECT COUNT(*) AS n FROM accounts'))[0].n;
+  const r = await api().post('/api/v1/admin/users').set(bearer(token))
+    .send({ email: 'new@example.org', password: 'secret123', accountType: 'adult', language: 'en', mode: 'satsang' });
+  assert.equal(r.status, 404);
+  assert.equal((await h.query('SELECT COUNT(*) AS n FROM accounts'))[0].n, before);
+  // the docs list no POST for /admin/users either
+  assert.equal((await api().get('/api-docs.json')).body.paths['/admin/users'].post, undefined);
+});
