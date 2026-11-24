@@ -34,7 +34,7 @@ module.exports = {
   servers: [{ url: '/api/v1' }],
   tags: [
     { name: 'Meta' }, { name: 'Auth' }, { name: 'Account' }, { name: 'Profiles' }, { name: 'Parent PIN' },
-    { name: 'Admin Auth' }, { name: 'Admin Management' }, { name: 'Admin Users' }, { name: 'Admin Moderation' }, { name: 'Admin Audit' }, { name: 'Admin Dashboard' }, { name: 'Admin Deletion Requests' }, { name: 'Referrals' }, { name: 'Admin Referrals' },
+    { name: 'Admin Auth' }, { name: 'Admin Management' }, { name: 'Admin Users' }, { name: 'Admin Moderation' }, { name: 'Admin Audit' }, { name: 'Admin Dashboard' }, { name: 'Admin Deletion Requests' }, { name: 'Referrals' }, { name: 'Admin Referrals' }, { name: 'Export' },
   ],
   components: {
     securitySchemes: {
@@ -363,6 +363,19 @@ module.exports = {
         dob: str({ format: 'date', nullable: true }), ageGroup: str({ nullable: true, description: 'Label' }), ageGroupKey: str({ nullable: true }), ageGroupOverridden: bool(),
         email: str(), isParentEmail: bool(), studentStatus: { ...ref('StudentStatus'), nullable: true }, emailVerified: bool(),
         joined: str({ format: 'date-time' }), createdAt: str({ format: 'date-time' }), matched: bool() }) } })), ...errors(400, 401, 403) } }) },
+    '/admin/users/export.csv': { get: op('Admin Users', 'Export the Users table as CSV (Full Admin)', {
+      description: 'The same rows as GET /admin/users for the same filters and sort (q, country, ageGroup, accountType, classStatus, studentStatus, joinedSince, sort, order), every family (no pages): account row first, then its matching children. '
+        + 'Columns, in the panel’s order: Name, Username, Account type, Country (name), DOB (YYYY-MM-DD), Age group, Email (a child row has the parent’s email), Class status, Joined (DASHBOARD_TIMEZONE, "YYYY-MM-DD HH:MM"), then Account ID, Profile ID, Parent account ID so families stay linked. '
+        + 'UTF-8 with a BOM (Gujarati opens correctly in Excel), RFC 4180 quoting, CRLF line ends; text starting with = + - @ gets a leading apostrophe so it never runs as a formula. '
+        + 'File name satsang-spark-users-YYYY-MM-DD.csv. Audited as users.exported { count, filters }.',
+      security: admin, parameters: ['q', 'country', 'ageGroup', 'accountType', 'classStatus', 'studentStatus', 'joinedSince', 'sort', 'order'].map((name) => ({ name, in: 'query', schema: str(), description: 'As GET /admin/users' })),
+      responses: { 200: { description: 'CSV file', content: { 'text/csv': { schema: str() } } }, ...errors(400, 401, 403) } }) },
+    '/export/sheet': { get: op('Export', 'The Users table for the Google Sheet (server-to-server, X-Export-Key)', {
+      description: 'For the Admin Panel repo’s docs/google-sheet/Code.gs (setup: docs/google-sheet/SETUP.md there). Send header X-Export-Key = SHEET_EXPORT_KEY (compared in constant time). 404 when SHEET_EXPORT_KEY is empty (export off); 401 EXPORT_KEY_INVALID for a missing or wrong key; 429 after 30 calls per hour. No CORS (browser pages cannot read it); no admin token. '
+        + 'Every family, newest first, the same columns as the CSV export: columns[] gives key, label and type (string | date | datetime | number); each row is an array in that order (null = empty). joined is ISO UTC, dob YYYY-MM-DD. Nothing else is returned (no hashes, tokens, phone or gender). Audited as sheet.export { count }.',
+      parameters: [{ name: 'X-Export-Key', in: 'header', required: true, schema: str() }],
+      responses: { 200: ok('Rows', obj({ generatedAt: str({ format: 'date-time' }), columns: { type: 'array', items: obj({ key: str(), label: str(), type: str({ enum: ['string', 'date', 'datetime', 'number'] }) }) },
+        rows: { type: 'array', items: { type: 'array', items: { nullable: true } } } })), ...errors(401, 404, 429) } }) },
     '/admin/users/{accountId}': { get: op('Admin Users', 'The "View" page: one account with all its profiles (logged in the audit log as user.viewed)', {
       security: admin, parameters: [{ name: 'accountId', in: 'path', required: true, schema: int() }],
       responses: { 200: ok('Account detail', obj({

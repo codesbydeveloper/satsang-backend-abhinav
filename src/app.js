@@ -23,7 +23,10 @@ function createApp() {
   app.set('trust proxy', 1);                       // behind Hostinger's reverse proxy: use the real client IP
   app.set('json replacer', jsonTimestamps);        // DATETIMEs (UTC) leave the API as ISO strings ending in "Z"
   app.use(helmet({ contentSecurityPolicy: false }));
-  app.use(cors({ origin: config.corsOrigins.length ? config.corsOrigins : false, credentials: false }));
+  // Google Sheet export: server-to-server only (X-Export-Key), so it is mounted before CORS: no browser page can read it.
+  app.use('/api/v1/export', require('./routes/exportSheet'));
+  // exposedHeaders: the Admin Panel reads the CSV export's file name (another origin).
+  app.use(cors({ origin: config.corsOrigins.length ? config.corsOrigins : false, credentials: false, exposedHeaders: ['Content-Disposition'] }));
   app.use(express.json({ limit: '100kb' }));
   if (config.env !== 'test') app.use(morgan(SAFE_COMBINED));
   app.use(generalLimiter);
