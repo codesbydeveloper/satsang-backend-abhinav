@@ -20,7 +20,7 @@ async function independentLogin(email = 'meera@example.org', years = 25) {
   return v.body;
 }
 
-test('independent register needs only the date of birth; the session starts withoutt a profile', async () => {
+test('independent register needs only the date of birth; the session starts without a profile', async () => {
   const body = await independentLogin();
   assert.deepEqual(body.profiles, []);
   assert.equal(body.activeProfileId, null);
