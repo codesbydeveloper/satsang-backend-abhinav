@@ -515,6 +515,8 @@ module.exports = {
         referee: obj({ accountId: int(), accountType: str(), username: str({ nullable: true }) }),
         newUserSparks: int(), newUserStatus: str({ enum: ['reserved', 'credited'] }), referrerSparks: int(),
         createdAt: str(), qualifiedAt: str({ nullable: true }), creditedAt: str({ nullable: true }),
+        newUserWaitingForProfile: bool({ description: 'The new user reward is held: the account (a parent) has no playable profile yet; it is added to the first child profile when created' }),
+        referrerWaitingForProfile: bool({ description: 'The referrer reward is held: the referrer account (a parent) has no playable profile yet; it goes to the first child profile when created' }),
       }) } })), ...errors(401, 403) },
     }) },
     '/admin/referrals/settings': {

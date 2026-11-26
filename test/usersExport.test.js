@@ -56,7 +56,7 @@ function parseCsv(text) {
 const getCsv = (token, params = {}) => api().get('/api/v1/admin/users/export.csv').set(bearer(token)).query(params).buffer(true).parse((res, cb) => {
   const chunks = []; res.on('data', (c) => chunks.push(c)); res.on('end', () => cb(null, Buffer.concat(chunks)));
 });
-const HEADER = ['Name', 'Username', 'Account type', 'Country', 'DOB', 'Age group', 'Email', 'Class status', `Joined (${config.dashboardTimeZone})`, 'Account ID', 'Profile ID', 'Parent account ID'];
+const HEADER = ['Name', 'Username', 'Account type', 'Country', 'DOB', 'Age group', 'Email', 'Class status', 'Sparks', `Joined (${config.dashboardTimeZone})`, 'Account ID', 'Profile ID', 'Parent account ID'];
 
 test('CSV: Full Admin only', async () => {
   await h.resetDb();
@@ -83,18 +83,24 @@ test('CSV: BOM, headers, file name, family grouping, ids, escaping and Gujarati'
   const pid = String(s.p.account.id);
   assert.deepEqual(data.slice(0, 3).map((x) => x[2]), ['Parent', 'Child', 'Child']);
   assert.deepEqual(data[0].slice(0, 3), ['Priya Mehta', '', 'Parent']);
-  assert.deepEqual(data[0].slice(9), [pid, '', '']);
+  assert.deepEqual(data[0].slice(10), [pid, '', '']);
+  assert.equal(data[0][8], '', 'a parent account row has no profile, so no Sparks');
   for (const kid of data.slice(1, 3)) {
     assert.equal(kid[0], '', 'children have no name');
     assert.equal(kid[6], 'parent@example.org', 'child rows carry the parent email');
-    assert.equal(kid[9], pid); assert.equal(kid[11], pid);
+    assert.equal(kid[10], pid); assert.equal(kid[12], pid);
+    assert.match(kid[8], /^\d+$/, 'every profile row has a Sparks balance');
   }
-  const kidB = data.find((x) => x[10] === String(s.kidB.id));
+  const kidB = data.find((x) => x[11] === String(s.kidB.id));
   assert.deepEqual(kidB.slice(1, 8), ['કૃષ્ણ_b', 'Child', 'United Kingdom', h.dobYearsAgo(9, 30), 'Bals/Balikas B', 'parent@example.org', 'Interested']);
-  assert.match(kidB[8], /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.match(kidB[9], /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
   const anil = data.find((x) => x[1] === 'anil_a');
   assert.deepEqual(anil.slice(0, 8), ['Shah, "Anil" Kumar', 'anil_a', 'Adult', 'India', h.dobYearsAgo(30), 'Yuvaks/Yuvatis A', 'anil@example.org', 'Not answered']);
-  assert.deepEqual(anil.slice(9), [String(s.anil.account.id), String(s.anil.profiles[0].id), '']);
+  assert.deepEqual(anil.slice(10), [String(s.anil.account.id), String(s.anil.profiles[0].id), '']);
+  // Sparks: the real balance, right after Class status (same place as the Users table)
+  const bal = async (id) => String((await api().get(`/api/v1/admin/profiles/${id}/sparks`).set(bearer(s.token))).body.balance);
+  assert.equal(anil[8], await bal(s.anil.profiles[0].id));
+  assert.equal(kidB[8], await bal(s.kidB.id));
   assert.ok(text.includes('"Shah, ""Anil"" Kumar"'), 'comma and quotes are quoted and doubled');
   assert.equal(data.find((x) => x[1] === 'zara_z')[0], `'=HYPERLINK("x")`, 'a formula-looking name gets an apostrophe');
   assert.equal(/password|hash|Secret123|token/i.test(text), false);
@@ -159,13 +165,13 @@ test('sheet: table columns only, grouped rows, audited with the count only', asy
   assert.equal(r.headers['cache-control'], 'no-store');
   assert.deepEqual(Object.keys(r.body).sort(), ['columns', 'generatedAt', 'rows']);
   assert.match(r.body.generatedAt, /Z$/);
-  assert.deepEqual(r.body.columns.map((c) => c.key), ['name', 'username', 'accountType', 'country', 'dob', 'ageGroup', 'email', 'classStatus', 'joined', 'accountId', 'profileId', 'parentAccountId']);
-  assert.deepEqual(r.body.columns.map((c) => c.label).slice(0, 9), ['Name', 'Username', 'Account type', 'Country', 'DOB', 'Age group', 'Email', 'Class status', 'Joined']);
+  assert.deepEqual(r.body.columns.map((c) => c.key), ['name', 'username', 'accountType', 'country', 'dob', 'ageGroup', 'email', 'classStatus', 'sparks', 'joined', 'accountId', 'profileId', 'parentAccountId']);
+  assert.deepEqual(r.body.columns.map((c) => c.label).slice(0, 10), ['Name', 'Username', 'Account type', 'Country', 'DOB', 'Age group', 'Email', 'Class status', 'Sparks', 'Joined']);
   assert.deepEqual(r.body.columns.find((c) => c.key === 'dob').type, 'date');
   assert.deepEqual(r.body.columns.find((c) => c.key === 'joined').type, 'datetime');
   const rows = r.body.rows;
   assert.equal(rows.length, 5);
-  assert.ok(rows.every((x) => Array.isArray(x) && x.length === 12));
+  assert.ok(rows.every((x) => Array.isArray(x) && x.length === 13));
   const col = (k) => r.body.columns.findIndex((c) => c.key === k);
   assert.deepEqual(rows.slice(0, 3).map((x) => x[col('accountType')]), ['Parent', 'Child', 'Child']);
   assert.equal(rows[0][col('username')], null);
@@ -176,6 +182,10 @@ test('sheet: table columns only, grouped rows, audited with the count only', asy
   assert.equal(kidB[col('email')], 'parent@example.org');
   assert.equal(kidB[col('dob')], h.dobYearsAgo(9, 30));
   assert.match(kidB[col('joined')], /^\d{4}-\d{2}-\d{2}T.*Z$/);
+  assert.equal(r.body.columns[col('sparks')].type, 'number');
+  assert.equal(col('sparks'), col('classStatus') + 1, 'Sparks right after Class status');
+  assert.equal(rows[0][col('sparks')], null, 'parent account row: no profile, no Sparks');
+  assert.equal(typeof kidB[col('sparks')], 'number');
   assert.equal(/password|hash|pin|token|Secret123|gender|phone/i.test(JSON.stringify(r.body)), false);
 
   const a = await h.query("SELECT * FROM audit_log WHERE action = 'sheet.export'");

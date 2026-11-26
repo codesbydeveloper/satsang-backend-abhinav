@@ -165,6 +165,8 @@ const EXPORT_COLUMNS = [
   { key: 'ageGroup', label: 'Age group', type: 'string', value: (r) => r.ageGroup },
   { key: 'email', label: 'Email', type: 'string', value: (r) => r.email },
   { key: 'classStatus', label: 'Class status', type: 'string', value: (r) => (r.studentStatus ? STUDENT_STATUS_LABEL[r.studentStatus] || r.studentStatus : null) },
+  // the profile's Sparks balance (0 without Sparks); empty on a parent account row (no profile of its own)
+  { key: 'sparks', label: 'Sparks', type: 'number', value: (r) => r.sparksBalance },
   { key: 'joined', label: 'Joined', type: 'datetime', value: (r) => r.joined || null },
   { key: 'accountId', label: 'Account ID', type: 'number', value: (r) => r.accountId },
   { key: 'profileId', label: 'Profile ID', type: 'number', value: (r) => r.profileId },

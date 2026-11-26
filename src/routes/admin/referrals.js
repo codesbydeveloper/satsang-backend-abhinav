@@ -69,7 +69,9 @@ router.get('/', validate(z.object({
   const rows = await query(
     `SELECT rf.id, rf.code, rf.status, rf.new_user_sparks, rf.new_user_status, rf.referrer_sparks, rf.created_at, rf.qualified_at, rf.credited_at,
             rf.referrer_account_id, ra.account_type AS referrer_type, ${ownUsername('ra')} AS referrer_username,
-            rf.referee_account_id, ea.account_type AS referee_type, ${ownUsername('ea')} AS referee_username
+            rf.referee_account_id, ea.account_type AS referee_type, ${ownUsername('ea')} AS referee_username,
+            EXISTS (SELECT 1 FROM profiles px WHERE px.account_id = rf.referee_account_id) AS referee_has_profile,
+            EXISTS (SELECT 1 FROM profiles py WHERE py.account_id = rf.referrer_account_id) AS referrer_has_profile
        ${from} ORDER BY rf.id DESC LIMIT ? OFFSET ?`, [...params, pageSize, (page - 1) * pageSize]);
   const total = Number((await query(`SELECT COUNT(*) AS n ${from}`, params))[0].n);
   res.json({
@@ -80,6 +82,10 @@ router.get('/', validate(z.object({
       referee: { accountId: r.referee_account_id, accountType: r.referee_type, username: r.referee_username },
       newUserSparks: r.new_user_sparks, newUserStatus: r.new_user_status, referrerSparks: r.referrer_sparks,
       createdAt: r.created_at, qualifiedAt: r.qualified_at, creditedAt: r.credited_at,
+      // Account-level rewards go to the account's first playable profile (services/accountRewards.js). A parent who
+      // has not created a child yet has none, so the reward is held until the first child profile is created.
+      newUserWaitingForProfile: r.new_user_status === 'reserved' && r.new_user_sparks > 0 && !Number(r.referee_has_profile),
+      referrerWaitingForProfile: !!r.referrer_account_id && r.status !== 'rejected' && r.referrer_sparks > 0 && !Number(r.referrer_has_profile),
     })),
   });
 });

@@ -196,3 +196,36 @@ test('/api-docs lists the referral endpoints', async () => {
   const r = await api().get('/api-docs.json');
   for (const p of ['/me/referral', '/me/referral/apply', '/admin/referrals', '/admin/referrals/settings']) assert.ok(r.body.paths[p], p);
 });
+
+// A parent with no child profile yet has no playable profile: the account's referral reward is held until the first
+// child is created (services/accountRewards.js). The admin list flags it so the panel says "Waiting for first child profile".
+test('admin list: newUserWaitingForProfile / referrerWaitingForProfile while a parent has no child profile yet', async () => {
+  const A = bearer((await h.adminLogin(await h.makeAdmin('boss@example.org'))).token);
+  const rowFor = async (code) => (await api().get('/api/v1/admin/referrals').set(A)).body.rows.find((r) => r.code === code);
+
+  // the new user is a parent without children
+  const friend = await adult('friend@example.org', 'friend_1');
+  const friendCode = (await me(friend.auth)).body.code;
+  const p = await h.parentLogin('parent@example.org');
+  assert.equal((await apply(p.auth, friendCode)).status, 200);
+  let row = await rowFor(friendCode);
+  assert.equal(row.newUserStatus, 'reserved');
+  assert.equal(row.newUserWaitingForProfile, true);
+  assert.equal(row.referrerWaitingForProfile, false, 'the referrer is an adult with a profile');
+  const kid = await api().post('/api/v1/profiles').set(p.auth).send({ username: 'kid_first', avatarId: 2, dob: h.dobYearsAgo(8), parentalConsent: true });
+  assert.equal(kid.status, 201, JSON.stringify(kid.body));
+  row = await rowFor(friendCode);
+  assert.equal(row.newUserStatus, 'credited');
+  assert.equal(row.newUserWaitingForProfile, false, 'added to the first child');
+
+  // the referrer is a parent without children
+  const p2 = await h.parentLogin('parent2@example.org');
+  const p2Code = (await me(p2.auth)).body.code;
+  const newbie = await adult('new@example.org', 'new_one');
+  assert.equal((await apply(newbie.auth, p2Code)).status, 200);
+  row = await rowFor(p2Code);
+  assert.equal(row.newUserWaitingForProfile, false);
+  assert.equal(row.referrerWaitingForProfile, true);
+  await api().post('/api/v1/profiles').set(p2.auth).send({ username: 'kid_second', avatarId: 2, dob: h.dobYearsAgo(8), parentalConsent: true });
+  assert.equal((await rowFor(p2Code)).referrerWaitingForProfile, false);
+});
