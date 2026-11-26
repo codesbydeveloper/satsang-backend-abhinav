@@ -37,6 +37,9 @@ const SORTS = {   // sql: on the family's account row (h); key(): the same for t
   dob: { sql: 'h.dob', key: (r) => r.dob },
   ageGroup: { sql: AG_ORDER, key: (r) => { const i = AGE_GROUP_KEYS.indexOf(r.age_group); return i < 0 ? null : i; } },
   email: { sql: 'LOWER(h.email)', key: (r) => r.email.toLowerCase() },
+  // the playable profile's Sparks balance (profile_sparks; 0 before its first Sparks). A parent account row has no
+  // profile (null), so parent families sort after the others, with their children ordered inside by balance.
+  sparks: { sql: 'h.sparks_balance', key: (r) => (r.sparks_balance == null ? null : Number(r.sparks_balance)) },
   joined: { sql: 'h.joined', key: (r) => r.joined },
 };
 // Filters + sort (shared by the list and the CSV export).
@@ -50,7 +53,7 @@ const filterShape = {
   // accounts created at/after this instant (account rows only): the dashboard's "New registrations today"
   joinedSince: z.string().datetime({ offset: true }).transform((s) => new Date(s)).optional(),
   sort: z.enum(Object.keys(SORTS)).default('joined'),
-  order: z.enum(['asc', 'desc']).optional(),   // default: newest first for joined, A→Z otherwise
+  order: z.enum(['asc', 'desc']).optional(),   // default: newest first for joined, most Sparks first for sparks, A→Z otherwise
 };
 const filterSchema = z.object(filterShape);
 const listSchema = z.object({
@@ -63,20 +66,22 @@ const ROWS = `WITH r AS (
   SELECT a.id AS account_id, NULL AS parent_account_id, own.id AS profile_id, 0 AS is_child_row,
          CAST(a.account_type AS CHAR(10)) AS row_type, NULLIF(TRIM(CONCAT_WS(' ', a.first_name, a.last_name)), '') AS name,
          own.username, own.country, own.dob, own.age_group, own.age_group_override, own.student_status,
-         a.email, a.email_verified_at, a.created_at AS joined
+         a.email, a.email_verified_at, a.created_at AS joined,
+         CASE WHEN own.id IS NULL THEN NULL ELSE COALESCE(ops.balance, 0) END AS sparks_balance
     FROM accounts a
     LEFT JOIN profiles own ON own.id = (SELECT MIN(x.id) FROM profiles x WHERE x.account_id = a.id AND x.is_child = 0)
+    LEFT JOIN profile_sparks ops ON ops.profile_id = own.id
   UNION ALL
   SELECT a.id, a.id, c.id, 1, 'child', NULL, c.username, c.country, c.dob, c.age_group, c.age_group_override, c.student_status,
-         a.email, a.email_verified_at, c.created_at
-    FROM profiles c JOIN accounts a ON a.id = c.account_id WHERE c.is_child = 1)`;
+         a.email, a.email_verified_at, c.created_at, COALESCE(cps.balance, 0)
+    FROM profiles c JOIN accounts a ON a.id = c.account_id LEFT JOIN profile_sparks cps ON cps.profile_id = c.id WHERE c.is_child = 1)`;
 
 /**
  * The Users table rows for the given filters and sort. page/pageSize: one page of families; pageSize null: every
  * family. Returns { order, totalAccounts, totalRows, rows } (rows in rowView shape).
  */
 async function queryUsers({ q = '', country, ageGroup, accountType, classStatus = 'all', studentStatus, joinedSince, sort = 'joined', order, page = 1, pageSize = null } = {}) {
-  order = order || (sort === 'joined' ? 'desc' : 'asc');
+  order = order || (sort === 'joined' || sort === 'sparks' ? 'desc' : 'asc');
   const conds = []; const params = [];
   if (q) { conds.push('(LOWER(r.name) LIKE ? OR LOWER(r.username) LIKE ? OR LOWER(r.email) LIKE ?)'); const l = like(q.toLowerCase()); params.push(l, l, l); }
   if (country) { conds.push('r.country = ?'); params.push(country); }
@@ -131,6 +136,8 @@ function rowView(r) {
     ageGroup: ageGroupLabel(r.age_group), ageGroupKey: r.age_group, ageGroupOverridden: !!r.age_group_override,
     email: r.email, isParentEmail: child, studentStatus: r.profile_id ? r.student_status : null,
     emailVerified: !!r.email_verified_at, joined: toIso(r.joined), createdAt: r.joined,
+    // the profile's real Sparks balance (0 before its first Sparks); null on a parent account row (no profile)
+    sparksBalance: r.profile_id ? Number(r.sparks_balance ?? 0) : null,
     matched: !!r.matched,   // false: an account row shown only because one of its children matched
   };
 }

@@ -392,15 +392,17 @@ module.exports = {
         { name: 'classStatus', in: 'query', schema: str({ enum: ['all', 'verified', 'pending_verification', 'interested', 'not_enrolled'] }) },
         { name: 'studentStatus', in: 'query', schema: str({ example: 'pending_verification,interested' }), description: 'Older filter: one StudentStatus or a comma list of them' },
         { name: 'joinedSince', in: 'query', schema: str({ format: 'date-time' }), description: 'Accounts created at or after this instant (account rows only); the dashboard sends totals.todayStartsAt' },
-        { name: 'sort', in: 'query', schema: str({ enum: ['name', 'username', 'accountType', 'country', 'dob', 'ageGroup', 'email', 'joined'] }), description: 'Default joined' },
-        { name: 'order', in: 'query', schema: str({ enum: ['asc', 'desc'] }), description: 'Default desc for joined, asc otherwise' },
+        { name: 'sort', in: 'query', schema: str({ enum: ['name', 'username', 'accountType', 'country', 'dob', 'ageGroup', 'email', 'joined', 'sparks'] }), description: 'Default joined. sparks: by sparksBalance (parent account rows have none, so parent families come last; their children are ordered inside)' },
+        { name: 'order', in: 'query', schema: str({ enum: ['asc', 'desc'] }), description: 'Default desc for joined and sparks, asc otherwise' },
         { name: 'page', in: 'query', schema: int() }, { name: 'pageSize', in: 'query', schema: int({ description: 'Families per page (max 100)' }) }],
       responses: { 200: ok('Page of families', obj({ page: int(), pageSize: int(), sort: str(), order: str(), totalAccounts: int(), totalRows: int({ description: 'Rows matching the filters themselves (greyed parent rows not counted); equals the dashboard card for the same filter' }), countries: { type: 'array', items: str() }, rows: { type: 'array', items: obj({
         accountId: int(), parentAccountId: int({ nullable: true }), profileId: int({ nullable: true }), accountType: str({ enum: ['adult', 'parent', 'child'] }), isChild: bool(),
         name: str({ nullable: true, description: 'Account owner first + last name; null on child rows' }), username: str({ nullable: true }), country: str({ nullable: true }),
         dob: str({ format: 'date', nullable: true }), ageGroup: str({ nullable: true, description: 'Label' }), ageGroupKey: str({ nullable: true }), ageGroupOverridden: bool(),
         email: str(), isParentEmail: bool(), studentStatus: { ...ref('StudentStatus'), nullable: true }, emailVerified: bool(),
-        joined: str({ format: 'date-time' }), createdAt: str({ format: 'date-time' }), matched: bool() }) } })), ...errors(400, 401, 403) } }) },
+        joined: str({ format: 'date-time' }), createdAt: str({ format: 'date-time' }),
+        sparksBalance: int({ nullable: true, description: 'Sparks balance of the playable profile (0 before its first Sparks); null on a parent account row (no profile of its own)' }),
+        matched: bool() }) } })), ...errors(400, 401, 403) } }) },
     '/admin/users/export.csv': { get: op('Admin Users', 'Export the Users table as CSV (Full Admin)', {
       description: 'The same rows as GET /admin/users for the same filters and sort (q, country, ageGroup, accountType, classStatus, studentStatus, joinedSince, sort, order), every family (no pages): account row first, then its matching children. '
         + 'Columns, in the panel’s order: Name, Username, Account type, Country (name), DOB (YYYY-MM-DD), Age group, Email (a child row has the parent’s email), Class status, Joined (DASHBOARD_TIMEZONE, "YYYY-MM-DD HH:MM"), then Account ID, Profile ID, Parent account ID so families stay linked. '

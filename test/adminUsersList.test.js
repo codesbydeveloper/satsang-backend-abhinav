@@ -114,6 +114,44 @@ test('sort by age group, DOB, country and joined keeps children under their pare
   assert.deepEqual(names(joined).slice(0, 2), ['anil_a', 'zara_z']);
 });
 
+// Sparks column (chunk 2.2B fix): every profile row carries its real balance from profile_sparks.
+const adjust = (token, profileId, amount) => api().post(`/api/v1/admin/profiles/${profileId}/sparks/adjust`).set(bearer(token)).send({ amount, reason: 'Test adjustment' });
+const balanceOf = async (token, profileId) => (await api().get(`/api/v1/admin/profiles/${profileId}/sparks`).set(bearer(token))).body.balance;
+
+test('sparksBalance: the ledger balance on every profile row, 0 without Sparks, null on a parent account row', async () => {
+  const s = await seed();
+  // a profile that never had Sparks has no profile_sparks row at all: still 0
+  await h.query('DELETE FROM sparks_transactions WHERE profile_id = ?', [s.kidB.id]);
+  await h.query('DELETE FROM profile_sparks WHERE profile_id = ?', [s.kidB.id]);
+  assert.equal((await adjust(s.token, s.anil.profiles[0].id, 40)).status, 201);
+  const b = await list(s.token);
+  const row = (u) => b.rows.find((r) => r.username === u);
+  for (const [u, id] of [['anil_a', s.anil.profiles[0].id], ['zara_z', s.zara.profiles[0].id], ['kid_a', s.kidA.id]]) {
+    assert.equal(typeof row(u).sparksBalance, 'number', u);
+    assert.equal(row(u).sparksBalance, await balanceOf(s.token, id), `${u} equals GET /admin/profiles/:id/sparks`);
+  }
+  assert.equal(row('anil_a').sparksBalance, row('zara_z').sparksBalance + 40);
+  assert.equal(row('kid_b').sparksBalance, 0);
+  const parent = b.rows.find((r) => r.accountType === 'parent');
+  assert.equal(parent.profileId, null);
+  assert.equal(parent.sparksBalance, null);
+});
+
+test('sort=sparks: families by their account row (parent rows have none → last), children by balance inside; default most first', async () => {
+  const s = await seed();
+  const set = (id, n) => h.query(
+    'INSERT INTO profile_sparks (profile_id, balance, lifetime_earned) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE balance = VALUES(balance), lifetime_earned = VALUES(lifetime_earned)', [id, n, n]);
+  await set(s.anil.profiles[0].id, 300); await set(s.zara.profiles[0].id, 50); await set(s.kidA.id, 10); await set(s.kidB.id, 80);
+  const desc = await list(s.token, { sort: 'sparks' });
+  assert.equal(desc.order, 'desc');
+  assert.deepEqual(names(desc), ['anil_a', 'zara_z', '(Priya Mehta)', 'kid_b', 'kid_a']);
+  assert.deepEqual(desc.rows.map((r) => r.sparksBalance), [300, 50, null, 80, 10]);
+  const asc = await list(s.token, { sort: 'sparks', order: 'asc' });
+  assert.deepEqual(names(asc), ['zara_z', 'anil_a', '(Priya Mehta)', 'kid_a', 'kid_b']);
+  // filters still keep the family together
+  assert.deepEqual(names(await list(s.token, { sort: 'sparks', accountType: 'child' })), ['(Priya Mehta)', 'kid_b', 'kid_a']);
+});
+
 test('filters: a matching child brings its parent row (matched: false) above it', async () => {
   const s = await seed();
   const gb = await list(s.token, { country: 'gb' });
