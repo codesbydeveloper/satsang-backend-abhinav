@@ -2,6 +2,7 @@ const { z } = require('zod');
 const S = require('./schemas');
 const { toSql } = require('./time');
 const { badRequest, conflict, forbidden, notFound } = require('./errors');
+const sparks = require('../services/sparks');
 
 /**
  * Explore → account (client, 30 Oct 2026). The app keeps an Explore record on the device (no account, nothing
@@ -14,8 +15,9 @@ const { badRequest, conflict, forbidden, notFound } = require('./errors');
  * - Idempotent by transaction id: an entry already stored (by any call) is counted as a duplicate, never twice.
  * - The nickname is not sent: the app pre-fills it as the username in Profile setup / Add child, where it is
  *   live-checked and can be edited, so the import never overrides the user's choice.
- * - The server stays the final authority: entries are stored as 'pending_import' and nothing is credited here.
- *   TODO(M2 Sparks ledger / Dress Up): verify and credit 'sparks' and 'purchase' entries (creditPendingImports).
+ * - 'sparks' entries are credited to the profile's Sparks ledger at once (Milestone 2; verified, type explore_import,
+ *   the entry's transaction id) and marked 'credited'. Other entries stay 'pending_import'.
+ *   TODO(M2 Dress Up): verify and apply 'purchase' entries (creditPendingImports).
  *   TODO(M3 Quizzes / Puzzles / Learn): re-verify 'score' and 'progress' entries the same way.
  */
 
@@ -80,13 +82,16 @@ async function importExplore(c, req) {
     if (b.mode !== undefined) await c.query('UPDATE profiles SET mode = ? WHERE id = ?', [b.mode, profile.id]);
   }
 
-  let imported = 0;
+  let imported = 0, creditedSparks = 0;
   for (const [kind, codeValue, itemId, amount, when, id] of rowsOf(b)) {
+    const txId = id.toLowerCase();
     const r = await c.query(
       `INSERT IGNORE INTO explore_import_items (tx_id, account_id, profile_id, kind, code, item_id, amount, client_at)
        VALUES (?,?,?,?,?,?,?,?)`,
-      [id.toLowerCase(), a.id, profile.id, kind, codeValue, itemId, amount, toSql(new Date(Date.parse(when)))]);
-    imported += r.affectedRows ? 1 : 0;
+      [txId, a.id, profile.id, kind, codeValue, itemId, amount, toSql(new Date(Date.parse(when)))]);
+    if (!r.affectedRows) continue;
+    imported++;
+    if (kind === 'sparks') creditedSparks += await creditSparksEntry(c, profile.id, txId, codeValue, amount);
   }
   const total = rowsOf(b).length;
   if (imported) await c.query('UPDATE explore_imports SET items = items + ? WHERE account_id = ?', [imported, a.id]);
@@ -95,8 +100,26 @@ async function importExplore(c, req) {
     firstImport: first,
     imported,
     duplicates: total - imported,
+    credited: { sparks: creditedSparks },
     pending: await pendingSummary(c, profile.id),
   };
+}
+
+/**
+ * An Explore Sparks entry → the profile's Sparks ledger (verified, type explore_import, the device's own transaction
+ * id, so a later sync of the same entry is a duplicate). The entry becomes 'credited', or 'rejected' when its
+ * transaction id was already used for a different Sparks transaction. Returns the Sparks credited.
+ */
+async function creditSparksEntry(c, profileId, txId, reason, amount) {
+  try {
+    const r = await sparks.credit({ profileId, amount, type: 'explore_import', transactionId: txId, reference: `explore:${reason}`, note: 'Explore progress' }, c);
+    await c.query("UPDATE explore_import_items SET status = 'credited', decided_at = UTC_TIMESTAMP() WHERE tx_id = ?", [txId]);
+    return r.duplicate ? 0 : amount;
+  } catch (e) {
+    if (e.code !== 'TRANSACTION_ID_CONFLICT') throw e;
+    await c.query("UPDATE explore_import_items SET status = 'rejected', decided_at = UTC_TIMESTAMP() WHERE tx_id = ?", [txId]);
+    return 0;
+  }
 }
 
 /** What waits for Milestone 2/3 verification for a profile: { sparks (sum), purchases, scores, progress }. */

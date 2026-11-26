@@ -60,6 +60,7 @@ function createApp() {
   api.use('/admin/dashboard', require('./routes/admin/dashboard'));
   api.use('/admin/deletion-requests', require('./routes/admin/deletionRequests'));
   api.use('/admin/referrals', require('./routes/admin/referrals'));
+  api.use('/admin/sparks', require('./routes/admin/sparks'));
   app.use('/api/v1', api);
 
   app.get('/api-docs.json', (_req, res) => res.json(openapi));

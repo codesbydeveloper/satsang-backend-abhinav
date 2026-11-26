@@ -1,5 +1,5 @@
 // Explore → account: POST /me/explore-import (client, 30 Oct 2026). Once per account, idempotent by transaction id,
-// entries stored as 'pending_import' (nothing credited before Milestone 2/3).
+// Sparks entries credited to the profile's Sparks ledger (Milestone 2); other entries stored as 'pending_import'.
 const { test, beforeEach, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
@@ -31,17 +31,21 @@ const record = () => ({
 });
 const send = (auth, b) => api().post('/api/v1/me/explore-import').set(auth).send(b);
 
-test('independent: entries stored as pending_import, avatar and path applied, nothing credited', async () => {
+test('independent: Sparks entries credited to the ledger, others pending_import, avatar and path applied', async () => {
   const s = await independentWithProfile();
   const r = await send(s.auth, record());
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body, { profileId: s.profileId, firstImport: true, imported: 5, duplicates: 0, pending: { sparks: 15, purchases: 1, scores: 1, progress: 1 } });
+  assert.deepEqual(r.body, { profileId: s.profileId, firstImport: true, imported: 5, duplicates: 0, credited: { sparks: 15 }, pending: { sparks: 0, purchases: 1, scores: 1, progress: 1 } });
   const p = (await h.query('SELECT avatar_id, mode FROM profiles WHERE id = ?', [s.profileId]))[0];
   assert.equal(p.avatar_id, 9);
   assert.equal(p.mode, 'sanatan');
-  const rows = await h.query('SELECT status, COUNT(*) AS n FROM explore_import_items GROUP BY status');
-  assert.deepEqual(rows.map((x) => [x.status, Number(x.n)]), [['pending_import', 5]]);
-  assert.equal((await h.query('SELECT status FROM signup_bonuses'))[0].status, 'pending', 'the 100 sign-up Sparks are untouched');
+  const rows = await h.query('SELECT kind, status, COUNT(*) AS n FROM explore_import_items GROUP BY kind, status ORDER BY kind');
+  assert.deepEqual(rows.map((x) => [x.kind, x.status, Number(x.n)]), [['sparks', 'credited', 2], ['purchase', 'pending_import', 1], ['score', 'pending_import', 1], ['progress', 'pending_import', 1]]);
+  const ledger = await h.query("SELECT amount, status FROM sparks_transactions WHERE profile_id = ? AND type = 'explore_import' ORDER BY id", [s.profileId]);
+  assert.deepEqual(ledger.map((t) => [Number(t.amount), t.status]), [[10, 'verified'], [5, 'verified']]);
+  const bal = await api().get(`/api/v1/profiles/${s.profileId}/sparks`).set(s.auth);
+  assert.equal(bal.body.balance, 115, '100 sign-up + 15 Explore');
+  assert.equal((await h.query('SELECT status FROM signup_bonuses'))[0].status, 'credited');
 });
 
 test('idempotent: the same transaction ids again count as duplicates (a retry after a lost response)', async () => {
@@ -53,7 +57,8 @@ test('idempotent: the same transaction ids again count as duplicates (a retry af
   assert.equal(again.body.firstImport, false);
   assert.equal(again.body.imported, 0);
   assert.equal(again.body.duplicates, 5);
-  assert.equal(again.body.pending.sparks, 15, 'never counted twice');
+  assert.equal(again.body.credited.sparks, 0, 'never counted twice');
+  assert.equal((await api().get(`/api/v1/profiles/${s.profileId}/sparks`).set(s.auth)).body.balance, 115);
   assert.equal(Number((await h.query('SELECT items FROM explore_imports'))[0].items), 5);
 });
 
@@ -63,7 +68,8 @@ test('batches: a later call for the same profile adds new entries; avatar/path o
   const more = await send(s.auth, { avatarId: 1, mode: 'satsang', sparks: [{ txId: randomUUID(), amount: 3, reason: 'quiz_correct', at }] });
   assert.equal(more.status, 200);
   assert.equal(more.body.imported, 1);
-  assert.equal(more.body.pending.sparks, 18);
+  assert.equal(more.body.credited.sparks, 3);
+  assert.equal((await api().get(`/api/v1/profiles/${s.profileId}/sparks`).set(s.auth)).body.balance, 118);
   const p = (await h.query('SELECT avatar_id, mode FROM profiles WHERE id = ?', [s.profileId]))[0];
   assert.deepEqual([p.avatar_id, p.mode], [9, 'sanatan'], 'the first import decided');
 });

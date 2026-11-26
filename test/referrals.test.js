@@ -26,34 +26,34 @@ test('every account gets a unique 6-character code without 0 / O / 1 / I', async
   assert.match(ra.body.code, /^[2-9A-HJ-NP-Z]{6}$/);
   assert.notEqual(ra.body.code, (await me(b.auth)).body.code);
   assert.equal((await me(a.auth)).body.code, ra.body.code, 'stable');
-  assert.deepEqual(ra.body.counts, { total: 0, waitingForFirstQuiz: 0, qualified: 0, sparksPending: 0 });
+  assert.deepEqual(ra.body.counts, { total: 0, waitingForFirstQuiz: 0, qualified: 0, sparksPending: 0, sparksCredited: 0 });
   assert.equal(ra.body.canApply, true);
   assert.equal(ra.body.applied, null);
   assert.equal(ra.body.windowHours, 48);
 });
 
-test('apply: new user +25 reserved at once; referrer +50 waits for the first full quiz', async () => {
+test('apply: new user +25 credited at once; referrer +50 pending until the first full quiz', async () => {
   const friend = await adult('friend@example.org', 'friend_1');
   const code = (await me(friend.auth)).body.code;
   const newbie = await adult('new@example.org', 'new_one');
   const r = await apply(newbie.auth, ` ${code.toLowerCase()} `);
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.applied.sparks, 25);
-  assert.equal(r.body.applied.status, 'reserved');
-  assert.deepEqual(r.body.referral.applied, { code, sparks: 25, status: 'reserved' });
+  assert.equal(r.body.applied.status, 'credited');
+  assert.deepEqual(r.body.referral.applied, { code, sparks: 25, status: 'credited' });
   assert.equal(r.body.referral.canApply, false);
 
   const row = (await h.query('SELECT * FROM referrals'))[0];
   assert.equal(row.status, 'waiting_for_first_quiz');
   assert.equal(row.referrer_sparks, 50);
   const f = (await me(friend.auth)).body.counts;
-  assert.deepEqual(f, { total: 1, waitingForFirstQuiz: 1, qualified: 0, sparksPending: 0 });
+  assert.deepEqual(f, { total: 1, waitingForFirstQuiz: 1, qualified: 0, sparksPending: 0, sparksCredited: 0 });
 
   // Milestone 3 hook: the new user's first full quiz
   const profileId = (await h.query('SELECT id FROM profiles WHERE account_id = ?', [newbie.accountId]))[0].id;
   assert.equal(await R.onFirstQuizCompleted(profileId), true);
   assert.equal(await R.onFirstQuizCompleted(profileId), false, 'only once');
-  assert.deepEqual((await me(friend.auth)).body.counts, { total: 1, waitingForFirstQuiz: 0, qualified: 1, sparksPending: 50 });
+  assert.deepEqual((await me(friend.auth)).body.counts, { total: 1, waitingForFirstQuiz: 0, qualified: 1, sparksPending: 0, sparksCredited: 50 });
 });
 
 test('errors: INVALID_CODE, SELF_REFERRAL (own code, same mailbox), ALREADY_APPLIED, WINDOW_EXPIRED', async () => {

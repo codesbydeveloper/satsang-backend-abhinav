@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const config = require('../config');
-const { query } = require('../db');
+const { query, tx } = require('../db');
+const { settleAccountRewards } = require('../services/accountRewards');
 const { badRequest, conflict, forbidden } = require('./errors');
 const { readSettings } = require('./appSettings');
 
@@ -8,10 +9,10 @@ const { readSettings } = require('./appSettings');
  * Referrals (contract 8.3 + client rules, 30 Oct 2026).
  * - Every account has a unique short code (6 characters, no 0 / O / 1 / I) at account level, never per profile.
  * - A new account applies one friend's code, within referral_window_hours (48) of creating the account.
- * - New user: +referral_new_user_sparks (25) reserved at once. Referrer: +referral_referrer_sparks (50) only after the
- *   new user completes their first full quiz (status 'waiting_for_first_quiz' → onFirstQuizCompleted, Milestone 3).
- *   Sparks themselves are Milestone 2: like the 100 sign-up Sparks, both are recorded as reserved / pending here and
- *   credited by the Sparks ledger later (TODO(M2)).
+ * - New user: +referral_new_user_sparks (25) credited at once. Referrer: +referral_referrer_sparks (50) only after the
+ *   new user completes their first full quiz: a PENDING ledger row while 'waiting_for_first_quiz', verified by
+ *   onFirstQuizCompleted (Milestone 3). Both go through the Sparks ledger (services/accountRewards.js), to the
+ *   account's first playable profile (kept reserved while the account has none).
  * - Refused: unknown code (INVALID_CODE), own code or the same mailbox (SELF_REFERRAL), a second code for the account
  *   or from the same phone (ALREADY_APPLIED), too late (WINDOW_EXPIRED), referrer at referral_max_per_referrer
  *   (REFERRER_LIMIT; unlimited by default).
@@ -106,10 +107,12 @@ async function applyReferral(c, account, rawCode, deviceId) {
     `INSERT INTO referrals (referrer_account_id, referee_account_id, code, new_user_sparks, referrer_sparks, device_hash)
      VALUES (?,?,?,?,?,?)`,
     [referrer.id, account.id, code, s.referral_new_user_sparks, s.referral_referrer_sparks, device]);
-  // TODO(M2 Sparks ledger): credit new_user_sparks to the new user (unique transaction id "referral-new-<id>") and set
-  // new_user_status 'credited'; which profile of a parent account receives it is the same open question as the
-  // 100 sign-up Sparks.
-  return { id: r.insertId, sparks: s.referral_new_user_sparks, status: 'reserved' };
+  // Sparks ledger: the new user's reward now (transaction id "referral-new-<id>"), the referrer's as pending
+  // ("referral-referrer-<id>"). 'reserved' remains only while the new account has no playable profile yet.
+  await settleAccountRewards(c, account.id);
+  await settleAccountRewards(c, referrer.id);
+  const st = (await c.query('SELECT new_user_status FROM referrals WHERE id = ?', [r.insertId]))[0].new_user_status;
+  return { id: r.insertId, sparks: s.referral_new_user_sparks, status: st };
 }
 
 /** GET /me/referral for the account owner: own code, counts (no names) and the code this account used. */
@@ -131,6 +134,7 @@ async function referralView(account) {
       waitingForFirstQuiz: by.waiting_for_first_quiz || 0,
       qualified: (by.qualified || 0) + (by.credited || 0),
       sparksPending: (by.qualified || 0) * s.referral_referrer_sparks,
+      sparksCredited: Number((await query("SELECT COALESCE(SUM(referrer_sparks), 0) AS n FROM referrals WHERE referrer_account_id = ? AND status = 'credited'", [account.id]))[0].n),
     },
     applied: used ? { code: used.code, sparks: used.new_user_sparks, status: used.new_user_status } : null,
     canApply: !used && open,
@@ -140,16 +144,23 @@ async function referralView(account) {
 
 /**
  * Milestone 3 hook: call once a profile has completed its first full quiz. If its account was referred and the
- * referrer is still waiting, the referrer's reward becomes 'qualified' (credited by the M2 ledger later).
- * TODO(M3 Quizzes): call from the quiz-completion endpoint. TODO(M2 Sparks ledger): credit qualified rows.
+ * referrer is still waiting, the referral becomes 'qualified' and the referrer's pending ledger row is verified
+ * (status 'credited'; it stays 'qualified' while the referrer has no profile yet). Pass the quiz endpoint's tx
+ * connection `c` to make it part of the same transaction.
+ * TODO(M3 Quizzes): call from the quiz-completion endpoint.
  * @returns {Promise<boolean>} true when a referral qualified now
  */
-async function onFirstQuizCompleted(profileId) {
-  const r = await query(
-    `UPDATE referrals rf JOIN profiles p ON p.account_id = rf.referee_account_id
-     SET rf.status = 'qualified', rf.qualified_at = UTC_TIMESTAMP()
-     WHERE p.id = ? AND rf.status = 'waiting_for_first_quiz' AND rf.referrer_account_id IS NOT NULL`, [profileId]);
-  return r.affectedRows > 0;
+async function onFirstQuizCompleted(profileId, c) {
+  const work = async (cc) => {
+    const rf = (await cc.query(
+      `SELECT rf.id, rf.referrer_account_id FROM referrals rf JOIN profiles p ON p.account_id = rf.referee_account_id
+       WHERE p.id = ? AND rf.status = 'waiting_for_first_quiz' AND rf.referrer_account_id IS NOT NULL FOR UPDATE`, [profileId]))[0];
+    if (!rf) return false;
+    await cc.query("UPDATE referrals SET status = 'qualified', qualified_at = UTC_TIMESTAMP() WHERE id = ?", [rf.id]);
+    await settleAccountRewards(cc, rf.referrer_account_id);
+    return true;
+  };
+  return c ? work(c) : tx(work);
 }
 
 module.exports = { ALPHABET, CODE_LENGTH, newCode, normalizeCode, ensureReferralCode, mailboxKey, applyReferral, referralView, onFirstQuizCompleted, applyUntil };

@@ -11,11 +11,30 @@ function profileView(p, { own = false } = {}) {
     v.dob = p.dob;
     v.country = p.country ?? null;
     v.studentStatus = p.student_status || 'not_asked';
-    // Sparks this profile received for its student status (verified / interest confirmed), reserved until the
-    // Milestone 2 Sparks ledger credits them (profile_sparks_rewards). Own account only, like studentStatus.
+    // Sparks this profile received for its student status (verified / interest confirmed). Since Milestone 2 they are
+    // credited to the Sparks ledger (the name is kept for the app). Own account only, like studentStatus.
     v.studentSparksReserved = Number(p.student_sparks_awarded || 0);
+    // Current spendable Sparks of THIS profile (never pooled across a parent account). Set by withSparks().
+    v.sparksBalance = Number(p.sparks_balance || 0);
   }
   return v;
+}
+
+/** Adds sparks_balance (profile_sparks.balance) to profile rows, in place. Returns the rows. */
+async function withSparks(rows) {
+  const list = Array.isArray(rows) ? rows : [rows];
+  const ids = list.filter(Boolean).map((p) => p.id);
+  if (!ids.length) return rows;
+  const bal = await query(`SELECT profile_id, balance FROM profile_sparks WHERE profile_id IN (${ids.map(() => '?').join(',')})`, ids);
+  const by = new Map(bal.map((r) => [Number(r.profile_id), Number(r.balance)]));
+  for (const p of list) if (p) p.sparks_balance = by.get(Number(p.id)) || 0;
+  return rows;
+}
+
+/** One profile row (with its Sparks balance), or undefined. */
+async function profileById(id) {
+  const p = (await query('SELECT * FROM profiles WHERE id = ?', [id]))[0];
+  return p ? withSparks(p) : p;
 }
 
 /** Effective age group: admin override wins, otherwise derived from DOB today (Eastern Time). */
@@ -31,7 +50,7 @@ async function loadProfiles(accountId) {
       p.age_group = ag;
     }
   }
-  return rows;
+  return withSparks(rows);
 }
 
 /** Recompute stored age groups for every profile. Run daily (cron) so leaderboards stay correct. */
@@ -50,4 +69,4 @@ const accountView = (a) => ({
   emailVerified: !!a.email_verified_at, parentPinSet: !!a.parent_pin_hash,
 });
 
-module.exports = { profileView, effectiveAgeGroup, loadProfiles, refreshAllAgeGroups, accountView };
+module.exports = { profileView, withSparks, profileById, effectiveAgeGroup, loadProfiles, refreshAllAgeGroups, accountView };

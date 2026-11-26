@@ -34,4 +34,7 @@
 - [x] Swagger/OpenAPI docs, tests (202)
 - [ ] Verified by Abhinav on his machine and merged
 - [ ] Deployed to Loyadham's Hostinger (needs Node-capable plan, domain, SMTP details)
-## M2 ... M4: see CLAUDE.md
+## M2
+- [x] 2.1 Sparks Economy core ledger (contract 8.1): `sparks_transactions` (UTC, unique `transaction_id`, verified / pending / reversed) + per-profile `profile_sparks` (balance, lifetime earned, lifetime spent, pending; row-locked, never below zero → 409 `INSUFFICIENT_SPARKS`, never pooled across a parent account) (migration 019); `src/services/sparks.js` credit / spend / addPending / verifyPending / reverse / adjust / getBalance / getHistory, idempotent on transaction id; reserved Sparks (sign-up 100, student verified / interest, Explore, referral new user) moved into the ledger with deterministic ids, re-run safe (migration 020); referrer reward pending until the first quiz; no new reserved rows (sign-up, student, Explore, referral code paths use the ledger); `sparks_reward_config` per activity × age group, seeded defaults to be confirmed by Loyadham; app `GET /profiles/:id/sparks` + `/sparks/history`, `sparksBalance` in own profile views, `sparks` per child in the parent report; Full Admin `GET /admin/profiles/:id/sparks` + `/history`, `POST /admin/profiles/:id/sparks/adjust` (audit `sparks.adjusted`), `GET`/`PUT /admin/sparks/config` (audit `sparks.config_changed`); Swagger; tests (14). Steps: `docs/postman-sparks.md`
+- [ ] Dress Up (Thakorji + Krishna), Home tab, audio/music, related admin sections
+## M3 ... M4: see CLAUDE.md

@@ -9,6 +9,7 @@ const { unauthorized, conflict } = require('../utils/errors');
 const { verifyPin, setPin } = require('../utils/pin');
 const { forbidden, notFound } = require('../utils/errors');
 const { etDate, addDays } = require('../utils/time');
+const { balancesOf } = require('../services/sparks');
 
 const router = express.Router();
 router.use(requireAuth, requireParent);
@@ -62,11 +63,13 @@ router.get('/report', validate(reportSchema, 'query'), async (req, res) => {
   const rows = kids.length ? await query(
     `SELECT profile_id, game_day, active_seconds, learn_items_done, quizzes_completed, games_played, sparks_earned
        FROM profile_daily_activity WHERE profile_id IN (?) AND game_day BETWEEN ? AND ? ORDER BY game_day DESC`, [kids.map((k) => k.id), from, today]) : [];
+  const bal = await balancesOf(kids.map((k) => k.id));   // each child's own Sparks (never pooled)
   res.json({ from, to: today, timeZone: 'America/New_York', children: kids.map((k) => {
     const mine = rows.filter((r) => r.profile_id === k.id);
     const sum = (f) => mine.reduce((t, r) => t + r[f], 0);
     return { profileId: k.id, username: k.username, ageGroup: k.age_group, studentStatus: k.student_status,
       studentSparksReserved: Number(k.student_sparks_awarded || 0),
+      sparks: bal.get(Number(k.id)) || { balance: 0, lifetimeEarned: 0, lifetimeSpent: 0, pending: 0 },
       todaySeconds: (mine.find((r) => String(r.game_day).slice(0, 10) === today) || {}).active_seconds || 0,
       totals: { activeSeconds: sum('active_seconds'), learnItemsDone: sum('learn_items_done'), quizzesCompleted: sum('quizzes_completed'), gamesPlayed: sum('games_played'), sparksEarned: sum('sparks_earned') },
       byDay: mine.map((r) => ({ day: String(r.game_day).slice(0, 10), activeSeconds: r.active_seconds, learnItemsDone: r.learn_items_done, quizzesCompleted: r.quizzes_completed, gamesPlayed: r.games_played, sparksEarned: r.sparks_earned })) };

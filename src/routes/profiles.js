@@ -9,7 +9,9 @@ const { badRequest, notFound, forbidden, conflict } = require('../utils/errors')
 const { verifyPin } = require('../utils/pin');
 const { checkUsername, lowerKey } = require('../utils/usernameFilter');
 const { ageOn, ageGroupForDob } = require('../utils/ageGroup');
-const { profileView, loadProfiles } = require('../utils/profiles');
+const { profileView, loadProfiles, withSparks, profileById } = require('../utils/profiles');
+const { settleAccountRewards } = require('../services/accountRewards');
+const sparks = require('../services/sparks');
 const { signAccessToken } = require('../utils/tokens');
 const { etDate } = require('../utils/time');
 const { deleteChildProfile } = require('../utils/accountDeletion');
@@ -71,13 +73,17 @@ router.post('/', requireParent, validate(createSchema), async (req, res) => {
   const u = await checkUsername(b.username);
   if (!u.ok) throw badRequest('USERNAME_' + u.reason, 'That username cannot be used');
 
-  const r = await query(
-    `INSERT INTO profiles (account_id, username, username_lower, avatar_id, dob, age_group, is_child, language, content_language, mode, country, consent_version, consent_at)
-     VALUES (?,?,?,?,?,?,1,?,?,?,?,?,UTC_TIMESTAMP())`,
-    [req.account.id, b.username.normalize('NFC'), lowerKey(b.username), b.avatarId, b.dob, ageGroupForDob(b.dob),
-      b.language || req.account.preferred_language, b.contentLanguage || b.language || req.account.preferred_language,
-      b.mode || null, b.country || null, config.privacyPolicyVersion]);
-  const p = (await query('SELECT * FROM profiles WHERE id = ?', [r.insertId]))[0];
+  const id = await tx(async (c) => {
+    const r = await c.query(
+      `INSERT INTO profiles (account_id, username, username_lower, avatar_id, dob, age_group, is_child, language, content_language, mode, country, consent_version, consent_at)
+       VALUES (?,?,?,?,?,?,1,?,?,?,?,?,UTC_TIMESTAMP())`,
+      [req.account.id, b.username.normalize('NFC'), lowerKey(b.username), b.avatarId, b.dob, ageGroupForDob(b.dob),
+        b.language || req.account.preferred_language, b.contentLanguage || b.language || req.account.preferred_language,
+        b.mode || null, b.country || null, config.privacyPolicyVersion]);
+    await settleAccountRewards(c, req.account.id);   // the first child receives the account's waiting sign-up / referral Sparks
+    return r.insertId;
+  });
+  const p = await profileById(id);
   res.status(201).json({ profile: profileView(p, { own: true }) });
 });
 
@@ -111,7 +117,7 @@ router.patch('/:id', validate(idParam, 'params'), validate(patchSchema), async (
   if (contentLanguage !== undefined) await query('UPDATE profiles SET content_language = ? WHERE id = ?', [contentLanguage, p.id]);
   if (mode !== undefined) await query('UPDATE profiles SET mode = ? WHERE id = ?', [mode, p.id]);
   if (country !== undefined) await query('UPDATE profiles SET country = ? WHERE id = ?', [country, p.id]);
-  const fresh = (await query('SELECT * FROM profiles WHERE id = ?', [p.id]))[0];
+  const fresh = await profileById(p.id);
   res.json({ profile: profileView(fresh, { own: true }) });
 });
 
@@ -124,8 +130,37 @@ router.put('/:id/student-status', validate(idParam, 'params'), validate(studentS
   if (req.account.account_type === 'parent') await requireParentArea(req, req.body.pin);
   const { from, to } = await tx((c) => setStudentStatusByUser(c, p.id, req.body));
   await audit(req, 'student.status_set', { entityType: 'profile', entityId: p.id, details: { from, to, by: 'user' } });
-  const fresh = (await query('SELECT * FROM profiles WHERE id = ?', [p.id]))[0];
+  const fresh = await profileById(p.id);
   res.json({ profile: profileView(fresh, { own: true }) });
+});
+
+/**
+ * Sparks of one playable profile (Milestone 2, contract 8.1): an independent account sees its own profile; a parent
+ * sees each child from the parent area; a child's session sees only that child (a sibling → 403
+ * PARENT_MODE_REQUIRED). Another account's profile → 404. Read only: Sparks change only through the server's ledger.
+ */
+async function sparksProfile(req) {
+  const p = await ownedProfile(req);
+  if (req.account.account_type === 'parent' && req.profileId && req.profileId !== p.id) {
+    throw forbidden('PARENT_MODE_REQUIRED', "Switch to the parent area to see another profile's Sparks");
+  }
+  return p;
+}
+
+router.get('/:id/sparks', validate(idParam, 'params'), async (req, res) => {
+  const p = await sparksProfile(req);
+  res.json({ profileId: p.id, ...(await sparks.getBalance(p.id)) });
+});
+
+const historyQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  status: z.enum(['verified', 'pending', 'reversed']).optional(),
+});
+router.get('/:id/sparks/history', validate(idParam, 'params'), validate(historyQuery, 'query'), async (req, res) => {
+  const p = await sparksProfile(req);
+  const h = await sparks.getHistory(p.id, req.validated.query);
+  res.json({ profileId: p.id, ...h, items: h.items.map(sparks.appTxView) });
 });
 
 // Delete one child profile and all its data with the Parent PIN (contract 3.4); the parent account and the other
@@ -145,6 +180,7 @@ router.post('/:id/switch', requireParent, validate(idParam, 'params'), validate(
   const p = await ownedProfile(req);
   await verifyPin(req.account, req.body.pin);
   await query('UPDATE refresh_tokens SET profile_id = ? WHERE session_id = ? AND revoked_at IS NULL', [p.id, req.sessionId]);
+  await withSparks(p);
   res.json({ accessToken: signAccessToken(req.account, p.id, req.sessionId), activeProfileId: p.id, profile: profileView(p, { own: true }) });
 });
 

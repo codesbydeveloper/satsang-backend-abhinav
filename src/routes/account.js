@@ -7,7 +7,8 @@ const validate = require('../middleware/validate');
 const { requireAuth } = require('../middleware/auth');
 const S = require('../utils/schemas');
 const { unauthorized, badRequest, forbidden, conflict, notFound } = require('../utils/errors');
-const { accountView, profileView, loadProfiles } = require('../utils/profiles');
+const { accountView, profileView, loadProfiles, withSparks, profileById } = require('../utils/profiles');
+const { settleAccountRewards } = require('../services/accountRewards');
 const { signAccessToken } = require('../utils/tokens');
 const { deleteAccountCompletely } = require('../utils/accountDeletion');
 const { authLimiter } = require('../middleware/rateLimit');
@@ -46,6 +47,7 @@ router.post('/active-profile', validate(z.object({ profileId: z.number().int().p
     await verifyPin(a, req.body.pin);
   }
   await query('UPDATE refresh_tokens SET profile_id = ? WHERE session_id = ? AND account_id = ? AND revoked_at IS NULL', [target, req.sessionId, a.id]);
+  if (profile) await withSparks(profile);
   res.json({
     accessToken: signAccessToken(a, target, req.sessionId),
     activeProfileId: target,
@@ -157,9 +159,10 @@ router.post('/profile', validate(z.object({ username: S.username, avatarId: S.av
     await c.query('UPDATE accounts SET dob = NULL WHERE id = ?', [a.id]);
     // this device session now plays as the new profile (refresh keeps it)
     await c.query('UPDATE refresh_tokens SET profile_id = ? WHERE session_id = ? AND account_id = ? AND revoked_at IS NULL', [r.insertId, req.sessionId, a.id]);
+    await settleAccountRewards(c, a.id);   // the sign-up bonus (and a referral reward) waited for this first profile
     return r.insertId;
   });
-  const p = (await query('SELECT * FROM profiles WHERE id = ?', [profileId]))[0];
+  const p = await profileById(profileId);
   res.status(201).json({
     accessToken: signAccessToken(a, profileId, req.sessionId),
     activeProfileId: profileId,
@@ -219,7 +222,7 @@ router.patch('/settings', validate(z.object({ language: S.language.optional(), c
     if (req.profileId && country !== undefined) await c.query('UPDATE profiles SET country = ? WHERE id = ? AND account_id = ?', [country, req.profileId, req.account.id]);
   });
   const a = (await query('SELECT * FROM accounts WHERE id = ?', [req.account.id]))[0];
-  const p = req.profileId ? (await query('SELECT * FROM profiles WHERE id = ?', [req.profileId]))[0] : null;
+  const p = req.profileId ? await profileById(req.profileId) : null;
   res.json({ account: accountView(a), profile: p ? profileView(p, { own: true }) : null });
 });
 

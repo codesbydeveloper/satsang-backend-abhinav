@@ -1,5 +1,6 @@
 const config = require('../config');
 const { badRequest, conflict, notFound } = require('./errors');
+const sparks = require('../services/sparks');
 
 /**
  * Student status (Loyadham Online Classes: Bals-Balikas or Kishor-Kishori Classes), client 21 Nov 2026.
@@ -16,9 +17,10 @@ const { badRequest, conflict, notFound } = require('./errors');
  *   reject           pending_verification → not_enrolled        no Sparks
  *   reset            any (except not_asked) → not_asked          no Sparks taken back
  *
- * Sparks belong to that exact profile. There is no Sparks ledger before Milestone 2, so (like the sign-up bonus,
- * referrals and Explore imports) the reward is reserved in profile_sparks_rewards and credited by the ledger later.
- * Each reward is given at most once per profile (unique key), so reset + verify again never pays twice.
+ * Sparks belong to that exact profile and are credited to its Sparks ledger at once (Milestone 2; types
+ * student_verified / student_interest, transaction id "<reward>-<profileId>"). Each reward is given at most once per
+ * profile (unique transaction id; rewards reserved in Milestone 1's profile_sparks_rewards count too), so reset +
+ * verify again never pays twice. profile_sparks_rewards is no longer written (kept for history; migration 020).
  */
 
 const STUDENT_STATUSES = ['not_asked', 'pending_verification', 'verified', 'interested', 'interest_confirmed', 'not_enrolled'];
@@ -42,6 +44,8 @@ const TRANSITIONS = {
   reject: { from: ['pending_verification'], to: 'not_enrolled', audit: 'student.rejected' },
   reset: { from: null, to: 'not_asked', audit: 'student.reset' },
 };
+
+const LEDGER_TYPE = { student_verified: 'student_verified', student_interest_confirmed: 'student_interest' };
 
 const rewardAmount = (reward) => (reward === 'student_verified' ? config.studentVerifiedSparks : config.studentInterestSparks);
 
@@ -75,10 +79,17 @@ async function applyAdminAction(c, profileId, action, adminId) {
   let sparksAwarded = 0;
   if (t.reward) {
     const amount = rewardAmount(t.reward);
-    const r = await c.query(
-      'INSERT IGNORE INTO profile_sparks_rewards (profile_id, reward, sparks, tx_id, awarded_by) VALUES (?,?,?,?,?)',
-      [p.id, t.reward, amount, `${t.reward}-${p.id}`, adminId]);
-    if (r.affectedRows) sparksAwarded = amount;   // 0 when this reward was already given (e.g. after a reset)
+    // Sparks ledger, same transaction (the profile row is already locked). The transaction id is per profile and
+    // reward ("student_verified-42", as reserved in Milestone 1 and migrated by 020), so a reset + verify again
+    // returns duplicate and pays nothing.
+    const tid = `${t.reward}-${p.id}`;
+    const already = (await c.query('SELECT 1 FROM sparks_transactions WHERE transaction_id = ?', [tid])).length
+      || (await c.query('SELECT 1 FROM profile_sparks_rewards WHERE profile_id = ? AND reward = ?', [p.id, t.reward])).length;
+    if (!already && amount > 0) {
+      const r = await sparks.credit({ profileId: p.id, amount, type: LEDGER_TYPE[t.reward], transactionId: tid,
+        reference: `profile:${p.id}`, note: t.reward === 'student_verified' ? 'Student status verified' : 'Class interest confirmed', createdBy: adminId }, c);
+      if (!r.duplicate) sparksAwarded = amount;
+    }
   }
 
   if (action === 'reset') {

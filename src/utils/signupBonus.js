@@ -1,18 +1,23 @@
-const { query } = require('../db');
+const { query, tx } = require('../db');
+const { settleAccountRewards } = require('../services/accountRewards');
 
 /** Sparks promised on the Sign Up screen ("Receive 100 Sparks"). */
 const SIGNUP_BONUS_SPARKS = 100;
 
 /**
- * Reserves the sign-up bonus when the account's email is verified: one 'pending' row per account (the primary key
- * makes a second verification, or a retry, a no-op).
- * TODO(M2 Sparks ledger): credit the pending bonus to the Sparks ledger (unique transaction id per account) and set
- * status 'credited' + credited_at. Open question for Loyadham: which profile of a parent account receives it.
+ * Gives the sign-up bonus when the account's email is verified: one signup_bonuses row per account (the primary key
+ * makes a second verification, or a retry, a no-op), credited at once to the Sparks ledger of the account's first
+ * playable profile (transaction id "signup_bonus-account-<id>", status 'credited'). An account without a profile yet
+ * (a parent before the first child, an independent user before Profile setup) keeps it 'pending' until its first
+ * profile is created (services/accountRewards.settleAccountRewards). Open question for Loyadham: which child of a
+ * parent account receives it (today: the first child).
  */
-async function reserveSignupBonus(accountId, conn = null) {
-  const sql = 'INSERT IGNORE INTO signup_bonuses (account_id, sparks, status) VALUES (?, ?, \'pending\')';
-  if (conn) await conn.query(sql, [accountId, SIGNUP_BONUS_SPARKS]);
-  else await query(sql, [accountId, SIGNUP_BONUS_SPARKS]);
+async function grantSignupBonus(accountId, conn = null) {
+  const work = async (c) => {
+    await c.query('INSERT IGNORE INTO signup_bonuses (account_id, sparks, status) VALUES (?, ?, \'pending\')', [accountId, SIGNUP_BONUS_SPARKS]);
+    return settleAccountRewards(c, accountId);
+  };
+  return conn ? work(conn) : tx(work);
 }
 
 /** { sparks, status } for the account owner (GET /me), or null before the email is verified. */
@@ -21,4 +26,4 @@ async function signupBonusOf(accountId) {
   return row ? { sparks: row.sparks, status: row.status } : null;
 }
 
-module.exports = { SIGNUP_BONUS_SPARKS, reserveSignupBonus, signupBonusOf };
+module.exports = { SIGNUP_BONUS_SPARKS, grantSignupBonus, signupBonusOf };

@@ -73,7 +73,7 @@ test('under the consent age: PARENT_ACCOUNT_REQUIRED before any other field is v
   assert.equal(h.outbox.filter((m) => m.to === 'meera@example.org').length, 0);
 });
 
-test('email verification reserves 100 Sparks once; GET /me shows it to the owner', async () => {
+test('email verification records 100 Sparks once (pending until the first profile exists); GET /me shows it to the owner', async () => {
   await register(independent());
   assert.equal((await query('SELECT COUNT(*) AS n FROM signup_bonuses'))[0].n, 0, 'nothing before verification');
   const v = await verify('meera@example.org');
@@ -91,7 +91,7 @@ test('email verification reserves 100 Sparks once; GET /me shows it to the owner
   const rows = await query('SELECT sparks, status, credited_at FROM signup_bonuses');
   assert.equal(rows.length, 1);
   assert.equal(rows[0].sparks, 100);
-  assert.equal(rows[0].credited_at, null, 'credited in Milestone 2');
+  assert.equal(rows[0].credited_at, null, 'credited when the first profile is created (services/accountRewards)');
 
   const p = await h.parentLogin('kiran@example.org');
   const pm = await api().get('/api/v1/me').set(p.auth);

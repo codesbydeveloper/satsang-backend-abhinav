@@ -15,6 +15,9 @@ const user = [{ userBearer: [] }];
 const admin = [{ adminBearer: [] }];
 
 const op = (tag, summary, o = {}) => ({ tags: [tag], summary, ...o });
+const { TYPES: SPARKS_TYPES, REWARD_ACTIVITIES } = require('./services/sparks');
+const pageParams = [{ name: 'page', in: 'query', schema: int({ minimum: 1, default: 1 }) }, { name: 'pageSize', in: 'query', schema: int({ minimum: 1, maximum: 100, default: 25 }) }];
+const sparksStatusParam = { name: 'status', in: 'query', schema: str({ enum: ['verified', 'pending', 'reversed'] }) };
 
 module.exports = {
   openapi: '3.0.3',
@@ -33,7 +36,7 @@ module.exports = {
   },
   servers: [{ url: '/api/v1' }],
   tags: [
-    { name: 'Meta' }, { name: 'Auth' }, { name: 'Account' }, { name: 'Profiles' }, { name: 'Parent PIN' },
+    { name: 'Meta' }, { name: 'Auth' }, { name: 'Account' }, { name: 'Profiles' }, { name: 'Sparks' }, { name: 'Admin Sparks' }, { name: 'Parent PIN' },
     { name: 'Admin Auth' }, { name: 'Admin Management' }, { name: 'Admin Users' }, { name: 'Admin Moderation' }, { name: 'Admin Audit' }, { name: 'Admin Dashboard' }, { name: 'Admin Deletion Requests' }, { name: 'Referrals' }, { name: 'Admin Referrals' }, { name: 'Export' },
   ],
   components: {
@@ -50,8 +53,33 @@ module.exports = {
         dob: str({ format: 'date', description: 'Only returned to the profile’s own account.' }),
         country: { ...ref('CountryCode'), nullable: true, description: 'Private: only returned to the profile’s own account (never on leaderboards or public views). Null for profiles created before Profile setup asked for it.' },
         studentStatus: { ...ref('StudentStatus'), description: 'Only returned to the profile’s own account. Set with PUT /profiles/{id}/student-status.' },
-        studentSparksReserved: int({ minimum: 0, description: 'Only returned to the profile’s own account. Sparks this profile received for its student status (verified / interest confirmed), reserved until the Milestone 2 Sparks ledger credits them. Also per child in GET /parent/report.' }),
+        studentSparksReserved: int({ minimum: 0, description: 'Only returned to the profile’s own account. Sparks this profile received for its student status (verified / interest confirmed); since Milestone 2 they are credited to its Sparks ledger (name kept). Also per child in GET /parent/report.' }),
+        sparksBalance: int({ minimum: 0, description: 'Only returned to the profile’s own account. Current spendable Sparks of THIS profile (never pooled across a parent account). Details: GET /profiles/{id}/sparks.' }),
         createdAt: str(),
+      }),
+      SparksBalance: obj({
+        balance: int({ minimum: 0, description: 'Spendable now (verified Sparks). Never below zero.' }),
+        lifetimeEarned: int({ minimum: 0, description: 'All verified Sparks earned (leaderboards). Spending never lowers it; a reversed credit or a negative admin correction does.' }),
+        lifetimeSpent: int({ minimum: 0, description: 'All verified spending (purchases), minus refunds.' }),
+        pending: int({ minimum: 0, description: 'Offline / waiting Sparks not yet verified (e.g. a referral reward until the friend completes a first quiz). Not spendable.' }),
+      }),
+      SparksTransaction: obj({
+        id: int(), transactionId: str({ description: 'Unique (client UUID or server id such as signup_bonus-account-12), lower case' }),
+        amount: int({ description: '+ earned / − spent or deducted' }), type: str({ enum: SPARKS_TYPES }),
+        status: str({ enum: ['verified', 'pending', 'reversed'] }), reference: str({ nullable: true, description: 'e.g. item:crown, attempt id, account:12, referral:5' }),
+        createdAt: str(), verifiedAt: str({ nullable: true }), reversedAt: str({ nullable: true }),
+      }),
+      AdminSparksTransaction: { allOf: [ref('SparksTransaction'), obj({
+        profileId: int(), note: str({ nullable: true, description: 'Admin reason / system note (not sent to the app)' }),
+        createdBy: int({ nullable: true, description: 'admins.id' }), reversedBy: int({ nullable: true }), reversedReason: str({ nullable: true }),
+      })] },
+      SparksReward: obj({
+        activity: str({ enum: REWARD_ACTIVITIES }), ageGroup: str({ enum: AGE_GROUP_KEYS }), sparks: int({ minimum: 0, maximum: 10000 }),
+        defaultSparks: int(), isDefault: bool(), updatedBy: int({ nullable: true }), updatedAt: str({ nullable: true }),
+      }),
+      SparksRewardConfig: obj({
+        activities: { type: 'array', items: str() }, ageGroups: { type: 'array', items: obj({ key: str(), label: str() }) },
+        rewards: { type: 'array', items: ref('SparksReward') }, note: str({ example: 'Seeded values are defaults to be confirmed by Loyadham.' }),
       }),
       StudentStatus: str({
         enum: ['not_asked', 'pending_verification', 'verified', 'interested', 'interest_confirmed', 'not_enrolled'],
@@ -59,7 +87,7 @@ module.exports = {
       }),
       ReferralView: obj({
         code: str({ example: 'K7P2QX' }), newUserSparks: int(), referrerSparks: int(), windowHours: int(),
-        counts: obj({ total: int(), waitingForFirstQuiz: int(), qualified: int(), sparksPending: int() }),
+        counts: obj({ total: int(), waitingForFirstQuiz: int(), qualified: int(), sparksPending: int({ description: 'Qualified but not yet credited (the referrer has no profile yet)' }), sparksCredited: int({ description: 'Referrer Sparks credited to the ledger' }) }),
         applied: { ...obj({ code: str(), sparks: int(), status: str({ enum: ['reserved', 'credited'] }) }), nullable: true },
         canApply: bool(), applyUntil: str({ format: 'date-time' }),
       }),
@@ -75,7 +103,7 @@ module.exports = {
           firstName: str({ nullable: true, description: 'Private. Null for accounts created before Sign Up asked for it.' }),
           lastName: str({ nullable: true, description: 'Private.' }),
           gender: str({ enum: ['male', 'female', 'prefer_not_to_say'], nullable: true, description: 'Private.' }),
-          signupBonus: { ...obj({ sparks: int({ example: 100 }), status: str({ enum: ['pending', 'credited'], description: 'pending = reserved at email verification; credited to the Sparks ledger in Milestone 2' }) }), nullable: true },
+          signupBonus: { ...obj({ sparks: int({ example: 100 }), status: str({ enum: ['pending', 'credited'], description: 'credited = in the Sparks ledger of the account’s first profile (own profile / first child); pending = the account has no profile yet (credited when the first one is created)' }) }), nullable: true },
         })],
       },
       AuthResponse: obj({ accessToken: str(), refreshToken: str(), account: ref('Account'), profiles: { type: 'array', items: ref('Profile') }, activeProfileId: int({ nullable: true }) }),
@@ -142,7 +170,7 @@ module.exports = {
         + 'the owner’s `firstName`, `lastName` (letters of any script, spaces, - and apostrophes only; 1–50 characters after trimming; a '
         + 'typographic apostrophe is stored as a plain one) and `gender`. These are private: returned only by GET /me and the Admin Panel '
         + 'user detail, never logged. Under the consent age the 400 `PARENT_ACCOUNT_REQUIRED` comes before any other field is '
-        + 'validated (no field errors are revealed). Verifying the email reserves the 100 sign-up Sparks (GET /me `signupBonus`).',
+        + 'validated (no field errors are revealed). Verifying the email gives the 100 sign-up Sparks once per account (GET /me `signupBonus`): credited to the first profile’s Sparks ledger.',
       requestBody: body(obj({
         email: str(), password: str({ description: '8–72 chars, at least one letter and one number' }), accountType: str({ enum: ['adult', 'parent'] }),
         phone: str({ description: 'Optional contact only — never used to log in' }), language: str({ enum: ['en', 'gu'] }),
@@ -207,7 +235,7 @@ module.exports = {
         'Independent account: goes into its own profile (`profileId` optional). Parent account: `profileId` of one of its children is required, from the parent area.',
         'The first call fixes the target profile and applies `avatarId` / `mode` to it; later calls (batches, retries) must name the same profile, otherwise 409 `EXPLORE_ALREADY_IMPORTED`.',
         'Each entry has a unique UUID `txId`: one already stored is counted in `duplicates`, never twice. At most 200 entries per call.',
-        'Nothing is credited here: entries are stored as `pending_import` and verified/credited by the server in Milestone 2 (Sparks, purchases) and 3 (scores, progress). The nickname is not sent (it is pre-filled as the username and live-checked in Profile setup / Add child).',
+        '`sparks` entries are credited at once to the profile’s Sparks ledger (type explore_import, the entry’s `txId` as transaction id) and returned in `credited`. Purchases, scores and progress are stored as `pending_import` (Dress Up / Milestone 3). The nickname is not sent (it is pre-filled as the username and live-checked in Profile setup / Add child).',
       ].join('\n\n'),
       security: user,
       requestBody: body(obj({
@@ -222,7 +250,8 @@ module.exports = {
       responses: {
         200: ok('Stored (or already stored)', obj({
           profileId: int(), firstImport: bool(), imported: int(), duplicates: int(),
-          pending: obj({ sparks: int({ description: 'Sum of pending Explore Sparks' }), purchases: int(), scores: int(), progress: int() }),
+          credited: obj({ sparks: int({ description: 'Explore Sparks credited to the ledger by this call' }) }),
+          pending: obj({ sparks: int({ description: 'Sum of Explore Sparks still pending (normally 0)' }), purchases: int(), scores: int(), progress: int() }),
         })),
         ...errors(400, 401, 403, 404, 409),
       },
@@ -236,7 +265,7 @@ module.exports = {
       description: 'Once per account, within the window (default 48 h after creating the account). A parent account applies it from the parent area. Errors: 400 `INVALID_CODE`, 400 `SELF_REFERRAL` (own code or the same mailbox), 409 `ALREADY_APPLIED` (this account, or a code already used on this device), 403 `WINDOW_EXPIRED`, 409 `REFERRER_LIMIT`, 403 `PARENT_MODE_REQUIRED`. Amounts and limits: Admin Panel (app_settings).',
       security: user,
       requestBody: body(obj({ code: str({ example: 'K7P2QX' }), deviceId: str({ description: 'Optional random install id of the app (not a hardware id); stored only as an HMAC, to refuse a second referral from the same phone.' }) }, ['code'])),
-      responses: { 200: ok('Applied', obj({ applied: obj({ id: int(), sparks: int(), status: str({ enum: ['reserved'] }) }), referral: ref('ReferralView') })), ...errors(400, 401, 403, 409, 429) },
+      responses: { 200: ok('Applied', obj({ applied: obj({ id: int(), sparks: int(), status: str({ enum: ['credited', 'reserved'], description: 'credited = in the ledger now; reserved = the account has no profile yet' }) }), referral: ref('ReferralView') })), ...errors(400, 401, 403, 409, 429) },
     }) },
     '/me/password': { post: op('Account', 'Change the password; every other device is logged out, this one stays logged in', {
       description: 'newPassword: 8–72 characters with a letter and a number. Every earlier access token stops working; use the returned one (the refresh token '
@@ -287,9 +316,17 @@ module.exports = {
     '/parent/pin/reset': { post: op('Parent PIN', 'Forgot the PIN: set a new one with the account password (also clears a lock; the parent stays logged in)', {
       security: user, requestBody: body(obj({ password: str(), newPin: str() }, ['password', 'newPin'])), responses: { 200: ok('Reset'), ...errors(401) } }) },
 
+    '/profiles/{id}/sparks': { get: op('Sparks', 'Sparks of one playable profile: balance, lifetimeEarned, lifetimeSpent, pending', {
+      description: 'Own profile (independent account), or a child from the parent area. From a child’s session only that child (a sibling → 403 PARENT_MODE_REQUIRED). Another account’s profile → 404. Sparks are per profile, never pooled across a parent account; the server is authoritative.',
+      security: user, parameters: [idParam],
+      responses: { 200: ok('Balance', { allOf: [obj({ profileId: int() }), ref('SparksBalance')] }), ...errors(401, 403, 404) } }) },
+    '/profiles/{id}/sparks/history': { get: op('Sparks', 'Sparks history of one playable profile, newest first (paged)', {
+      description: 'Same access rules as GET /profiles/{id}/sparks. Admin notes and admin ids are not included.',
+      security: user, parameters: [idParam, ...pageParams, sparksStatusParam],
+      responses: { 200: ok('History', obj({ profileId: int(), page: int(), pageSize: int(), total: int(), items: { type: 'array', items: ref('SparksTransaction') } })), ...errors(400, 401, 403, 404) } }) },
     '/profiles/activity': { post: op('Profiles', 'Older heartbeat (1–300 s added to today). The app uses POST /me/activity/heartbeat.', {
       security: user, requestBody: body(obj({ seconds: int({ minimum: 1, maximum: 300 }) }, ['seconds'])), responses: { 200: ok('ok'), ...errors(400, 401, 403) } }) },
-    '/parent/report': { get: op('Parent PIN', 'Parent report: daily time and activity per child (parent mode only); each child also carries studentStatus and studentSparksReserved', {
+    '/parent/report': { get: op('Parent PIN', 'Parent report: daily time and activity per child (parent mode only); each child also carries studentStatus, studentSparksReserved and its own sparks { balance, lifetimeEarned, lifetimeSpent, pending }', {
       security: user, parameters: [{ name: 'profileId', in: 'query', schema: int() }, { name: 'days', in: 'query', schema: int({ minimum: 1, maximum: 90, default: 7 }) }], responses: { 200: ok('Report'), ...errors(401, 403, 404) } }) },
 
     '/admin/auth/login': { post: op('Admin Auth', 'Step 1: email + password. With a deviceToken of one of this admin’s live trusted devices → logged in at once (step "done", no code; audited as admin.login_success { method: trusted_device }). Otherwise a 6-digit code is emailed ("Your Satsang Spark admin login code", valid 10 minutes) and a single-use challenge token (10 minutes) is returned (step "email_otp"); deviceTokenInvalid: true when a deviceToken was sent but is not trusted (any more), so the panel can forget it. rememberMe (default false) is carried to verify-otp. Every completed sign-in emails all active Full Admins "Satsang Spark Admin – new sign-in" in the background (at most once per admin per 10 minutes). Wrong email or password: the same 401 INVALID_CREDENTIALS. 5 failures (password or code) lock the admin for 15 minutes: 429 ADMIN_LOCKED.', {
@@ -484,6 +521,28 @@ module.exports = {
         security: admin, requestBody: body(ref('ReferralSettings')),
         responses: { 200: ok('Saved', obj({ settings: ref('ReferralSettings') })), ...errors(400, 401, 403) },
       }),
+    },
+    '/admin/profiles/{id}/sparks': { get: op('Admin Sparks', 'One playable profile’s Sparks balance (Full Admin)', {
+      security: admin, parameters: [idParam],
+      responses: { 200: ok('Balance', { allOf: [obj({ profileId: int(), accountId: int(), username: str(), isChild: bool() }), ref('SparksBalance')] }), ...errors(401, 403, 404) } }) },
+    '/admin/profiles/{id}/sparks/history': { get: op('Admin Sparks', 'One profile’s Sparks ledger, newest first, with admin notes (Full Admin)', {
+      security: admin, parameters: [idParam, ...pageParams, sparksStatusParam, { name: 'type', in: 'query', schema: str({ enum: SPARKS_TYPES }) }],
+      responses: { 200: ok('History', obj({ profileId: int(), accountId: int(), username: str(), isChild: bool(), page: int(), pageSize: int(), total: int(), items: { type: 'array', items: ref('AdminSparksTransaction') } })), ...errors(400, 401, 403, 404) } }) },
+    '/admin/profiles/{id}/sparks/adjust': { post: op('Admin Sparks', 'Add (amount > 0) or deduct (amount < 0) Sparks with a reason (Full Admin, audited as sparks.adjusted)', {
+      description: 'Type admin_adjust. A deduction is a correction: it lowers the balance and lifetime earned, and can never take the balance below zero (409 INSUFFICIENT_SPARKS, details { balance, needed }). transactionId (optional) makes a retried click safe: the same id again returns 200 duplicate: true and is not audited again; the same id with another amount → 409 TRANSACTION_ID_CONFLICT.',
+      security: admin, parameters: [idParam],
+      requestBody: body(obj({ amount: int({ minimum: -1000000, maximum: 1000000, description: 'Not 0' }), reason: str({ minLength: 3, maxLength: 255 }), transactionId: str({ maxLength: 64 }) }, ['amount', 'reason'])),
+      responses: {
+        201: ok('Adjusted', { allOf: [obj({ duplicate: bool(), transaction: ref('AdminSparksTransaction'), profileId: int(), accountId: int(), username: str(), isChild: bool() }), ref('SparksBalance')] }),
+        200: ok('Already done (same transactionId)'), ...errors(400, 401, 403, 404, 409),
+      } }) },
+    '/admin/sparks/config': {
+      get: op('Admin Sparks', 'Sparks per activity and per age group (Full Admin). Seeded values are defaults to be confirmed by Loyadham.', {
+        security: admin, responses: { 200: ok('Config', ref('SparksRewardConfig')), ...errors(401, 403) } }),
+      put: op('Admin Sparks', 'Change Sparks per activity / age group, no app release needed (Full Admin, audited as sparks.config_changed with each from → to)', {
+        description: 'Partial update: only the rows sent change; each activity + age group at most once; 0–10000 Sparks.',
+        security: admin, requestBody: body(obj({ rewards: { type: 'array', minItems: 1, items: obj({ activity: str({ enum: REWARD_ACTIVITIES }), ageGroup: str({ enum: AGE_GROUP_KEYS }), sparks: int({ minimum: 0, maximum: 10000 }) }, ['activity', 'ageGroup', 'sparks']) } }, ['rewards'])),
+        responses: { 200: ok('Saved', { allOf: [obj({ changed: { type: 'array', items: obj({ activity: str(), ageGroup: str(), from: int({ nullable: true }), to: int() }) } }), ref('SparksRewardConfig')] }), ...errors(400, 401, 403) } }),
     },
     '/admin/audit-log': { get: op('Admin Audit', 'Who changed what and when (Full Admin, read-only)', {
       security: admin, parameters: ['adminId', 'action', 'entityType', 'from', 'to', 'page', 'pageSize'].map((n) => ({ name: n, in: 'query', schema: str() })), responses: { 200: ok('Audit entries'), ...errors(401, 403) } }) },

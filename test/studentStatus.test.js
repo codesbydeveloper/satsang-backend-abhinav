@@ -12,7 +12,8 @@ const adminAct = (token, id, action) => api().post(`/api/v1/admin/profiles/${id}
 const addChild = (p, username) => api().post('/api/v1/profiles').set(p.auth)
   .send({ username, avatarId: 2, dob: h.dobYearsAgo(9, 30), parentalConsent: true });
 const profileRow = async (id) => (await h.query('SELECT * FROM profiles WHERE id = ?', [id]))[0];
-const rewards = (id) => h.query('SELECT reward, sparks, status, tx_id FROM profile_sparks_rewards WHERE profile_id = ? ORDER BY id', [id]);
+// student rewards in the Sparks ledger (Milestone 2; they were reserved in profile_sparks_rewards before)
+const rewards = (id) => h.query("SELECT type AS reward, amount AS sparks, status, transaction_id AS tx_id FROM sparks_transactions WHERE profile_id = ? AND type IN ('student_verified', 'student_interest') ORDER BY id", [id]);
 const auditRows = (action) => h.query('SELECT * FROM audit_log WHERE action = ? ORDER BY id', [action]);
 
 async function adult(email = 'ravi@example.org', username = 'ravi_k') {
@@ -88,7 +89,7 @@ test('a user can only set their own profiles; a parent only their own children, 
   assert.equal((await setStatus(childAuth, kid1.id, { enrolled: false, interested: false, pin: '1234' })).body.profile.studentStatus, 'not_enrolled');
 });
 
-test('admin verify: pending → verified, +10 Sparks reserved for that exact profile, then locked for the app', async () => {
+test('admin verify: pending → verified, +10 Sparks credited to that exact profile ledger, then locked for the app', async () => {
   const token = await fullAdmin();
   const p = await h.parentLogin();
   const kid1 = (await addChild(p, 'kid_one')).body.profile;
@@ -103,7 +104,7 @@ test('admin verify: pending → verified, +10 Sparks reserved for that exact pro
   assert.equal(row.student_status, 'verified');
   assert.ok(row.student_verified_by); assert.ok(row.student_verified_at);
   assert.equal(row.student_sparks_awarded, 10);
-  assert.deepEqual(await rewards(kid1.id), [{ reward: 'student_verified', sparks: 10, status: 'reserved', tx_id: `student_verified-${kid1.id}` }]);
+  assert.deepEqual(await rewards(kid1.id), [{ reward: 'student_verified', sparks: 10, status: 'verified', tx_id: `student_verified-${kid1.id}` }]);
   assert.deepEqual(await rewards(kid2.id), [], 'the sibling gets nothing');
   assert.equal((await profileRow(kid2.id)).student_sparks_awarded, 0);
 
@@ -276,7 +277,7 @@ test('public config: studentInterestFormUrl (empty by default) and the reward am
   assert.deepEqual(r.body.studentSparks, { verified: 10, interestConfirmed: 5 });
 });
 
-test('deleting a child profile removes its reserved rewards', async () => {
+test('deleting a child profile removes its Sparks rewards', async () => {
   const token = await fullAdmin();
   const p = await h.parentLogin();
   const kid = (await addChild(p, 'kid_one')).body.profile;
