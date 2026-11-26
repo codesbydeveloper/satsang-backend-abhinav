@@ -46,6 +46,7 @@ function createApp() {
 
   const api = express.Router();
   api.use(require('./routes/public'));
+  api.use(require('./routes/home'));
   api.use('/auth', require('./routes/auth'));
   api.use('/me', require('./routes/account'));
   api.use('/profiles', require('./routes/profiles'));
@@ -61,6 +62,9 @@ function createApp() {
   api.use('/admin/deletion-requests', require('./routes/admin/deletionRequests'));
   api.use('/admin/referrals', require('./routes/admin/referrals'));
   api.use('/admin/sparks', require('./routes/admin/sparks'));
+  api.use('/admin/home', require('./routes/admin/home'));
+  api.use('/admin/news', require('./routes/admin/news'));
+  api.use('/admin/feedback', require('./routes/admin/feedback'));
   app.use('/api/v1', api);
 
   app.get('/api-docs.json', (_req, res) => res.json(openapi));

@@ -45,6 +45,9 @@ const config = {
   studentVerifiedSparks: Number(process.env.STUDENT_VERIFIED_SPARKS ?? 10),
   studentInterestSparks: Number(process.env.STUDENT_INTEREST_SPARKS ?? 5),
   studentInterestFormUrl: (process.env.STUDENT_INTEREST_FORM_URL || '').trim(),
+  // Home tab Donate button: Loyadham's official donation page ("" = the app hides the button). A Full Admin can
+  // change it in the Admin Panel (app_settings donate_url overrides this default).
+  donateUrl: (process.env.DONATE_URL || '').trim(),
   minAppVersion: process.env.MIN_APP_VERSION || '1.0.0',
   privacyPolicyVersion: process.env.PRIVACY_POLICY_VERSION || '1.0',
   parentalConsentAge: Number(process.env.PARENTAL_CONSENT_AGE || 13),
@@ -63,10 +66,11 @@ for (const [name, v, min, max] of [['MAX_FULL_ADMINS', config.maxFullAdmins, 1, 
 for (const [name, v] of [['STUDENT_VERIFIED_SPARKS', config.studentVerifiedSparks], ['STUDENT_INTEREST_SPARKS', config.studentInterestSparks]]) {
   if (!Number.isInteger(v) || v < 0 || v > 100000) throw new Error(`${name} must be a whole number from 0 to 100000`);
 }
-if (config.studentInterestFormUrl) {
+for (const [name, v] of [['STUDENT_INTEREST_FORM_URL', config.studentInterestFormUrl], ['DONATE_URL', config.donateUrl]]) {
+  if (!v) continue;
   let u = null;
-  try { u = new URL(config.studentInterestFormUrl); } catch { /* invalid */ }
-  if (!u || !['https:', 'http:'].includes(u.protocol)) throw new Error('STUDENT_INTEREST_FORM_URL must be an http(s) address or empty');
+  try { u = new URL(v); } catch { /* invalid */ }
+  if (!u || !['https:', 'http:'].includes(u.protocol)) throw new Error(`${name} must be an http(s) address or empty`);
 }
 
 if (config.env === 'production') {

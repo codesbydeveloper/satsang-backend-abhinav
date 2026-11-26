@@ -36,7 +36,7 @@ module.exports = {
   },
   servers: [{ url: '/api/v1' }],
   tags: [
-    { name: 'Meta' }, { name: 'Auth' }, { name: 'Account' }, { name: 'Profiles' }, { name: 'Sparks' }, { name: 'Admin Sparks' }, { name: 'Parent PIN' },
+    { name: 'Meta' }, { name: 'Auth' }, { name: 'Account' }, { name: 'Profiles' }, { name: 'Sparks' }, { name: 'Admin Sparks' }, { name: 'Home' }, { name: 'Admin Home' }, { name: 'Parent PIN' },
     { name: 'Admin Auth' }, { name: 'Admin Management' }, { name: 'Admin Users' }, { name: 'Admin Moderation' }, { name: 'Admin Audit' }, { name: 'Admin Dashboard' }, { name: 'Admin Deletion Requests' }, { name: 'Referrals' }, { name: 'Admin Referrals' }, { name: 'Export' },
   ],
   components: {
@@ -80,6 +80,35 @@ module.exports = {
       SparksRewardConfig: obj({
         activities: { type: 'array', items: str() }, ageGroups: { type: 'array', items: obj({ key: str(), label: str() }) },
         rewards: { type: 'array', items: ref('SparksReward') }, note: str({ example: 'Seeded values are defaults to be confirmed by Loyadham.' }),
+      }),
+      SpinSegment: obj({ index: int({ description: '0-based position on the wheel' }), label: str({ nullable: true }), sparks: int({ minimum: 1 }) }),
+      SpinStatus: obj({
+        profileId: int(), available: bool(), nextAvailableAt: str({ format: 'date-time', description: 'When available: now. Otherwise 24 h after the last successful spin.' }),
+        lastSpinAt: str({ format: 'date-time', nullable: true }), segments: { type: 'array', items: ref('SpinSegment') },
+      }),
+      SpinResult: obj({
+        profileId: int(), duplicate: { type: 'boolean', description: 'true = this transactionId was already spun; the first result is returned' },
+        transactionId: str(), segmentIndex: int(), label: str({ nullable: true }), reward: int({ description: 'Sparks credited' }),
+        spunAt: str({ format: 'date-time' }), nextAvailableAt: str({ format: 'date-time' }), balance: ref('SparksBalance'),
+      }),
+      StreakView: obj({
+        profileId: int(), currentStreak: int({ description: '0 when the streak is broken (a game day was missed)' }), bestStreak: int(),
+        unclaimed: int({ description: 'Bonus waiting to be claimed; lost if the streak breaks first' }),
+        lastActiveDay: str({ format: 'date', nullable: true, description: 'Last counted game day (America/New_York)' }),
+        checkedInToday: bool(), nextDayBonus: int({ description: 'What the next counted day adds' }),
+        lostUnclaimed: int({ description: 'Bonus the last break took away (or is taking away)' }),
+        gameDay: str({ format: 'date' }), gameTimeZone: str({ example: 'America/New_York' }),
+        amounts: { type: 'array', items: int(), description: 'Sparks for streak day 1, 2, …; days after the last use the last amount' },
+      }),
+      News: obj({
+        id: int(), title: obj({ en: str(), gu: str({ nullable: true }) }), body: obj({ en: str(), gu: str({ nullable: true }) }),
+        imageUrl: str({ nullable: true }), publishAt: str({ format: 'date-time' }), pinned: bool(),
+      }),
+      AdminNews: { allOf: [ref('News'), obj({ active: bool(), createdBy: int({ nullable: true }), updatedBy: int({ nullable: true }), createdAt: str(), updatedAt: str({ nullable: true }) })] },
+      Feedback: obj({
+        id: int(), accountId: int(), profileId: int(), username: str(), isChild: bool(), category: str({ enum: ['bug', 'idea', 'other'] }),
+        message: str(), appVersion: str({ nullable: true }), device: str({ nullable: true }), status: str({ enum: ['open', 'resolved'] }),
+        adminNote: str({ nullable: true }), resolvedBy: int({ nullable: true }), resolvedAt: str({ nullable: true }), createdAt: str(),
       }),
       StudentStatus: str({
         enum: ['not_asked', 'pending_verification', 'verified', 'interested', 'interest_confirmed', 'not_enrolled'],
@@ -152,7 +181,9 @@ module.exports = {
       description: '`studentInterestFormUrl`: the interest form for the student-status question (STUDENT_INTEREST_FORM_URL); empty string = the app hides the form button. `studentSparks`: `{ verified, interestConfirmed }` Sparks a Full Admin’s verification / interest confirmation gives the profile (STUDENT_VERIFIED_SPARKS, STUDENT_INTEREST_SPARKS; defaults 10 and 5).',
       responses: { 200: ok('Config', obj({ minAppVersion: str(), privacyPolicyVersion: str(), parentalConsentAge: int(), languages: { type: 'array', items: str() }, modes: { type: 'array', items: str() },
         ageGroups: { type: 'array', items: obj({ key: str(), label: str(), minAge: int(), maxAge: int({ nullable: true }) }) }, serverTimeUtc: str({ format: 'date-time' }), gameDay: str({ format: 'date' }), gameTimeZone: str(),
-        studentInterestFormUrl: str({ example: '' }), studentSparks: obj({ verified: int({ example: 10 }), interestConfirmed: int({ example: 5 }) }) })) } }) },
+        studentInterestFormUrl: str({ example: '' }), studentSparks: obj({ verified: int({ example: 10 }), interestConfirmed: int({ example: 5 }) }),
+        donateUrl: str({ example: '', description: 'Home tab Donate button: Loyadham’s official donation page (Full Admin setting, default DONATE_URL); empty = hide the button' }),
+        features: obj({ leaderboards: str({ enum: ['coming_soon'] }), customizeAvatar: str({ enum: ['coming_soon'] }) }) })) } }) },
     '/avatars': { get: op('Meta', 'The 16 fixed V1 avatars: ids 1–10 animal (shadow, frosty, waddles, turbo, blaze, zippy, bamboo, ace, mango, coco), 11–16 human (young_boy, young_man, gentleman, young_girl, young_woman, lady)', { responses: { 200: ok('Avatar list') } }) },
     '/usernames/check': { get: op('Meta', 'Is a username available and allowed?', {
       parameters: [{ name: 'username', in: 'query', required: true, schema: str() }],
@@ -222,7 +253,7 @@ module.exports = {
         + 'Returns a new access token; the device session keeps the choice across refreshes.',
       security: user, requestBody: body(obj({ profileId: int({ nullable: true }), pin: str({ description: '4 digits' }) }, ['profileId'])),
       responses: { 200: ok('New access token', obj({ accessToken: str(), activeProfileId: int({ nullable: true }), profile: { ...ref('Profile'), nullable: true } })), ...errors(400, 401, 403, 404, 409, 429) } }) },
-    '/me/activity/heartbeat': { post: op('Account', 'Daily time: beats for the active profile (every ~60 s while the app is open; offline beats queued up to 1 day)', {
+    '/me/activity/heartbeat': { post: op('Account', 'Daily time: beats for the active profile (every ~60 s while the app is open; offline beats queued up to 1 day). Also counts today (server time) for the Streak Bonus.', {
       description: 'Each beat counts once per profile per UTC minute (retries are ignored) and is added to the America/New_York day it happened in. '
         + 'Beats in the future or more than 24 h old are ignored. 403 `NO_ACTIVE_PROFILE` in the parent area.',
       security: user, requestBody: body(obj({ beats: { type: 'array', minItems: 1, maxItems: 1500, items: obj({ at: str({ format: 'date-time' }), seconds: int({ minimum: 1, maximum: 60 }) }, ['at', 'seconds']) } }, ['beats'])),
@@ -324,7 +355,36 @@ module.exports = {
       description: 'Same access rules as GET /profiles/{id}/sparks. Admin notes and admin ids are not included.',
       security: user, parameters: [idParam, ...pageParams, sparksStatusParam],
       responses: { 200: ok('History', obj({ profileId: int(), page: int(), pageSize: int(), total: int(), items: { type: 'array', items: ref('SparksTransaction') } })), ...errors(400, 401, 403, 404) } }) },
-    '/profiles/activity': { post: op('Profiles', 'Older heartbeat (1–300 s added to today). The app uses POST /me/activity/heartbeat.', {
+    '/profiles/{id}/spin': {
+      get: op('Home', 'Daily Spark Spin status of one profile: available, nextAvailableAt, the wheel segments', {
+        description: 'Available 24 hours after this profile’s LAST successful spin (rolling, not calendar); an unclaimed spin never expires. Server time only. Same access rules as GET /profiles/{id}/sparks.',
+        security: user, parameters: [idParam], responses: { 200: ok('Status', ref('SpinStatus')), ...errors(401, 403, 404) } }),
+      post: op('Home', 'Spin: the server picks the segment (weighted) and credits the Sparks (ledger type daily_spin)', {
+        description: 'Only the profile that is playing on this device (the session’s active profile), else 403 PROFILE_NOT_ACTIVE. Not available yet → 409 SPIN_NOT_AVAILABLE with details { nextAvailableAt }. The same transactionId again → 200 with the first result (duplicate: true); used for another Sparks transaction → 409 TRANSACTION_ID_CONFLICT.',
+        security: user, parameters: [idParam], requestBody: body(obj({ transactionId: str({ maxLength: 64, description: 'Unique id from the app (UUID); a retry with the same id is processed once' }) }, ['transactionId'])),
+        responses: { 201: ok('Spun', ref('SpinResult')), 200: ok('Already spun with this transactionId', ref('SpinResult')), ...errors(400, 401, 403, 404, 409) } }),
+    },
+    '/profiles/{id}/streak': { get: op('Home', 'Streak Bonus of one profile: currentStreak, unclaimed, lastActiveDay (America/New_York game days)', {
+      description: 'Read only. A streak whose last counted day is before yesterday is broken: it reads 0 / 0 and the unclaimed bonus is lost. Same access rules as GET /profiles/{id}/sparks.',
+      security: user, parameters: [idParam], responses: { 200: ok('Streak', ref('StreakView')), ...errors(401, 403, 404) } }) },
+    '/profiles/{id}/streak/check-in': { post: op('Home', 'The app was opened: count today (once per game day) for the Streak Bonus', {
+      description: 'Consecutive game days (America/New_York, DST-aware) add 1; a missed day restarts at 1 and loses the unclaimed bonus. Each counted day adds that day’s amount to the unclaimed bonus. The activity heartbeat (POST /profiles/activity) counts the active profile too. Only the playing profile (403 PROFILE_NOT_ACTIVE).',
+      security: user, parameters: [idParam],
+      responses: { 200: ok('Counted (or already counted today)', { allOf: [obj({ counted: bool(), added: int(), lost: int() }), ref('StreakView')] }), ...errors(401, 403, 404) } }) },
+    '/profiles/{id}/streak/claim': { post: op('Home', 'Claim the unclaimed Streak Bonus (ledger type streak); resets only the unclaimed amount, never the streak', {
+      description: 'Counts today first. Nothing to claim → 409 NOTHING_TO_CLAIM. The same transactionId again → 200 with the first result (duplicate: true). Only the playing profile (403 PROFILE_NOT_ACTIVE).',
+      security: user, parameters: [idParam], requestBody: body(obj({ transactionId: str({ maxLength: 64, description: 'Unique id from the app (UUID); a retry with the same id is processed once' }) }, ['transactionId'])),
+      responses: { 201: ok('Claimed', { allOf: [obj({ duplicate: bool(), claimed: int(), transactionId: str(), balance: ref('SparksBalance') }), ref('StreakView')] }), 200: ok('Already claimed with this transactionId'), ...errors(400, 401, 403, 404, 409) } }) },
+    '/news': { get: op('Home', 'News & Updates: active items whose publish date has passed, pinned first, then newest first (public)', {
+      description: 'English and Gujarati texts; gu is null when not written (show English).',
+      parameters: [{ name: 'page', in: 'query', schema: int({ minimum: 1, default: 1 }) }, { name: 'pageSize', in: 'query', schema: int({ minimum: 1, maximum: 50, default: 20 }) }],
+      responses: { 200: ok('News', obj({ page: int(), pageSize: int(), total: int(), items: { type: 'array', items: ref('News') } })), ...errors(400) } }) },
+    '/feedback': { post: op('Home', 'Send feedback (bug | idea | other) for one of the account’s playable profiles', {
+      description: 'Own profile, or a child from the parent area or that child’s own session (a sibling → 403 PARENT_MODE_REQUIRED). Rate limited: 5 per hour and 20 per day per account, plus per IP → 429 FEEDBACK_RATE_LIMITED.',
+      security: user,
+      requestBody: body(obj({ profileId: int(), category: str({ enum: ['bug', 'idea', 'other'] }), message: str({ minLength: 1, maxLength: 1000 }), appVersion: str({ maxLength: 32 }), device: str({ maxLength: 100 }) }, ['profileId', 'category', 'message'])),
+      responses: { 201: ok('Received', obj({ id: int(), received: bool() })), ...errors(400, 401, 403, 404, 429) } }) },
+    '/profiles/activity': { post: op('Profiles', 'Older heartbeat (1–300 s added to today; also counts today for the active profile’s Streak Bonus). The app uses POST /me/activity/heartbeat.', {
       security: user, requestBody: body(obj({ seconds: int({ minimum: 1, maximum: 300 }) }, ['seconds'])), responses: { 200: ok('ok'), ...errors(400, 401, 403) } }) },
     '/parent/report': { get: op('Parent PIN', 'Parent report: daily time and activity per child (parent mode only); each child also carries studentStatus, studentSparksReserved and its own sparks { balance, lifetimeEarned, lifetimeSpent, pending }', {
       security: user, parameters: [{ name: 'profileId', in: 'query', schema: int() }, { name: 'days', in: 'query', schema: int({ minimum: 1, maximum: 90, default: 7 }) }], responses: { 200: ok('Report'), ...errors(401, 403, 404) } }) },
@@ -548,6 +608,46 @@ module.exports = {
         security: admin, requestBody: body(obj({ rewards: { type: 'array', minItems: 1, items: obj({ activity: str({ enum: REWARD_ACTIVITIES }), ageGroup: str({ enum: AGE_GROUP_KEYS }), sparks: int({ minimum: 0, maximum: 10000 }) }, ['activity', 'ageGroup', 'sparks']) } }, ['rewards'])),
         responses: { 200: ok('Saved', { allOf: [obj({ changed: { type: 'array', items: obj({ activity: str(), ageGroup: str(), from: int({ nullable: true }), to: int() }) } }), ref('SparksRewardConfig')] }), ...errors(400, 401, 403) } }),
     },
+    '/admin/home/spin-segments': {
+      get: op('Admin Home', 'Daily Spin wheel with weights and chance % (Full Admin). Built-in defaults to be confirmed by Loyadham (isDefault).', {
+        security: admin, responses: { 200: ok('Wheel', obj({ isDefault: bool(), updatedBy: int({ nullable: true }), updatedAt: str({ nullable: true }), note: str(), segments: { type: 'array', items: obj({ index: int(), label: str({ nullable: true }), sparks: int(), weight: int(), chancePercent: { type: 'number' } }) } })), ...errors(401, 403) } }),
+      put: op('Admin Home', 'Replace the wheel: 2–12 segments in order (Full Admin, audited spin.segments_changed with from → to)', {
+        security: admin, requestBody: body(obj({ segments: { type: 'array', minItems: 2, maxItems: 12, items: obj({ label: str({ maxLength: 40 }), sparks: int({ minimum: 1, maximum: 10000 }), weight: int({ minimum: 1, maximum: 1000 }) }, ['sparks', 'weight']) } }, ['segments'])),
+        responses: { 200: ok('Saved'), ...errors(400, 401, 403) } }),
+    },
+    '/admin/home/streak-bonus': {
+      get: op('Admin Home', 'Streak Bonus amounts per streak day (Full Admin). Built-in defaults to be confirmed by Loyadham.', {
+        security: admin, responses: { 200: ok('Amounts', obj({ isDefault: bool(), amounts: { type: 'array', items: int() }, updatedBy: int({ nullable: true }), updatedAt: str({ nullable: true }), note: str() })), ...errors(401, 403) } }),
+      put: op('Admin Home', 'Replace the amounts: day 1, 2, … (1–30 values, 0–10000; days after the last use the last) (Full Admin, audited streak.amounts_changed)', {
+        security: admin, requestBody: body(obj({ amounts: { type: 'array', minItems: 1, maxItems: 30, items: int({ minimum: 0, maximum: 10000 }) } }, ['amounts'])),
+        responses: { 200: ok('Saved'), ...errors(400, 401, 403) } }),
+    },
+    '/admin/home/donate-url': {
+      get: op('Admin Home', 'Donate button URL (Full Admin)', { security: admin, responses: { 200: ok('URL', obj({ donateUrl: str(), isDefault: bool(), defaultDonateUrl: str({ description: 'DONATE_URL setting' }), updatedBy: int({ nullable: true }), updatedAt: str({ nullable: true }) })), ...errors(401, 403) } }),
+      put: op('Admin Home', 'Set the Donate URL: Loyadham’s official donation page (http(s)); empty hides the button (Full Admin, audited donate_url.changed)', {
+        security: admin, requestBody: body(obj({ donateUrl: str({ maxLength: 255 }) }, ['donateUrl'])), responses: { 200: ok('Saved'), ...errors(400, 401, 403) } }),
+    },
+    '/admin/news': {
+      get: op('Admin Home', 'All news items (Full Admin + Content Editor), pinned first then newest', {
+        security: admin, parameters: [{ name: 'q', in: 'query', schema: str() }, { name: 'status', in: 'query', schema: str({ enum: ['all', 'published', 'scheduled', 'inactive'] }) }, ...pageParams],
+        responses: { 200: ok('News', obj({ page: int(), pageSize: int(), total: int(), items: { type: 'array', items: ref('AdminNews') } })), ...errors(400, 401, 403) } }),
+      post: op('Admin Home', 'Create a news item (Full Admin + Content Editor, audited news.created)', {
+        description: 'English title + body required; Gujarati optional. publishAt in the future = scheduled. active default true, pinned default false.',
+        security: admin, requestBody: body(obj({ titleEn: str({ maxLength: 150 }), titleGu: str({ maxLength: 150, nullable: true }), bodyEn: str({ maxLength: 10000 }), bodyGu: str({ maxLength: 10000, nullable: true }), imageUrl: str({ nullable: true, description: 'https only' }), publishAt: str({ format: 'date-time', description: 'Default now (create)' }), active: bool(), pinned: bool() }, ['titleEn', 'bodyEn'])),
+        responses: { 201: ok('Created', obj({ news: ref('AdminNews') })), ...errors(400, 401, 403) } }),
+    },
+    '/admin/news/{id}': {
+      get: op('Admin Home', 'One news item', { security: admin, parameters: [idParam], responses: { 200: ok('News', obj({ news: ref('AdminNews') })), ...errors(401, 403, 404) } }),
+      patch: op('Admin Home', 'Change any fields (audited news.updated with from → to; body texts only "changed")', {
+        security: admin, parameters: [idParam], requestBody: body(obj({ titleEn: str({ maxLength: 150 }), titleGu: str({ maxLength: 150, nullable: true }), bodyEn: str({ maxLength: 10000 }), bodyGu: str({ maxLength: 10000, nullable: true }), imageUrl: str({ nullable: true, description: 'https only' }), publishAt: str({ format: 'date-time', description: 'Default now (create)' }), active: bool(), pinned: bool() })), responses: { 200: ok('Updated', obj({ news: ref('AdminNews') })), ...errors(400, 401, 403, 404) } }),
+      delete: op('Admin Home', 'Delete a news item (audited news.deleted)', { security: admin, parameters: [idParam], responses: { 200: ok('Deleted', obj({ deleted: bool(), id: int() })), ...errors(401, 403, 404) } }),
+    },
+    '/admin/feedback': { get: op('Admin Home', 'App feedback, newest first (Full Admin); q = message or username, "#12" = id 12', {
+      security: admin, parameters: [{ name: 'q', in: 'query', schema: str() }, { name: 'status', in: 'query', schema: str({ enum: ['all', 'open', 'resolved'] }) }, { name: 'category', in: 'query', schema: str({ enum: ['all', 'bug', 'idea', 'other'] }) }, ...pageParams],
+      responses: { 200: ok('Feedback', obj({ page: int(), pageSize: int(), total: int(), openCount: int(), items: { type: 'array', items: ref('Feedback') } })), ...errors(400, 401, 403) } }) },
+    '/admin/feedback/{id}': { patch: op('Admin Home', 'Mark resolved or open again, with an optional note (Full Admin, audited feedback.resolved / feedback.reopened)', {
+      security: admin, parameters: [idParam], requestBody: body(obj({ status: str({ enum: ['open', 'resolved'] }), note: str({ maxLength: 500, nullable: true }) }, ['status'])),
+      responses: { 200: ok('Updated', obj({ feedback: ref('Feedback') })), ...errors(400, 401, 403, 404) } }) },
     '/admin/audit-log': { get: op('Admin Audit', 'Who changed what and when (Full Admin, read-only)', {
       security: admin, parameters: ['adminId', 'action', 'entityType', 'from', 'to', 'page', 'pageSize'].map((n) => ({ name: n, in: 'query', schema: str() })), responses: { 200: ok('Audit entries'), ...errors(401, 403) } }) },
   },

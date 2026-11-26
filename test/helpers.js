@@ -14,9 +14,10 @@ async function resetDb() {
   if (!/_test$/.test(require('../src/config').db.database)) throw new Error('Refusing to run tests: DB_NAME in .env.test must end with _test');
   await flushLoginAlerts();   // background login alerts from the previous test must not land in this one
   await query('SET FOREIGN_KEY_CHECKS = 0');
-  for (const t of ['sparks_transactions', 'profile_sparks', 'profile_sparks_rewards', 'referrals', 'explore_import_items', 'explore_imports', 'account_deletion_requests', 'audit_log', 'admin_login_codes', 'admin_trusted_devices', 'admin_refresh_tokens', 'profile_activity_minutes', 'profile_daily_activity', 'refresh_tokens', 'email_codes', 'signup_bonuses', 'profiles', 'accounts', 'admins']) await query(`TRUNCATE TABLE ${t}`);
+  for (const t of ['daily_spins', 'spin_segments', 'profile_streaks', 'streak_bonus_amounts', 'news', 'feedback', 'sparks_transactions', 'profile_sparks', 'profile_sparks_rewards', 'referrals', 'explore_import_items', 'explore_imports', 'account_deletion_requests', 'audit_log', 'admin_login_codes', 'admin_trusted_devices', 'admin_refresh_tokens', 'profile_activity_minutes', 'profile_daily_activity', 'refresh_tokens', 'email_codes', 'signup_bonuses', 'profiles', 'accounts', 'admins']) await query(`TRUNCATE TABLE ${t}`);
   await query('SET FOREIGN_KEY_CHECKS = 1');
   await query("UPDATE app_settings SET value = CASE setting_key WHEN 'referral_new_user_sparks' THEN '25' WHEN 'referral_referrer_sparks' THEN '50' WHEN 'referral_window_hours' THEN '48' ELSE NULL END, updated_by = NULL");
+  await query("DELETE FROM app_settings WHERE setting_key = 'donate_url'");
   await query('UPDATE sparks_reward_config SET sparks = default_sparks, is_default = 1, updated_by = NULL, updated_at = NULL');
   outbox.length = 0;
 }

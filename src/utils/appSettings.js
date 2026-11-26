@@ -37,4 +37,16 @@ async function writeSettings(values, adminId, defs = REFERRAL_SETTINGS) {
   return readSettings(defs);
 }
 
-module.exports = { REFERRAL_SETTINGS, readSettings, writeSettings };
+/** A text setting (e.g. donate_url): the stored value, or `fallback` when no admin has saved one. */
+async function readText(key, fallback = '') {
+  const r = (await query('SELECT value, updated_by, updated_at FROM app_settings WHERE setting_key = ?', [key]))[0];
+  return r ? { value: r.value ?? '', isDefault: false, updatedBy: r.updated_by == null ? null : Number(r.updated_by), updatedAt: r.updated_at }
+    : { value: fallback, isDefault: true, updatedBy: null, updatedAt: null };
+}
+async function writeText(key, value, adminId) {
+  await query(
+    'INSERT INTO app_settings (setting_key, value, updated_by) VALUES (?,?,?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_by = VALUES(updated_by)',
+    [key, value, adminId]);
+}
+
+module.exports = { REFERRAL_SETTINGS, readSettings, writeSettings, readText, writeText };

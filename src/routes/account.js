@@ -16,6 +16,7 @@ const { ageOn, ageGroupForDob } = require('../utils/ageGroup');
 const { checkUsername, lowerKey } = require('../utils/usernameFilter');
 const { verifyPin } = require('../utils/pin');
 const { TZ, etDate, toSql } = require('../utils/time');
+const streak = require('../services/streak');
 const { signupBonusOf } = require('../utils/signupBonus');
 const exploreImport = require('../utils/exploreImport');
 const referrals = require('../utils/referrals');
@@ -84,6 +85,8 @@ router.post('/activity/heartbeat', validate(beatSchema), async (req, res) => {
     counted++;
   }
   await query('DELETE FROM profile_activity_minutes WHERE profile_id = ? AND minute_start < ?', [req.profileId, toSql(new Date(now - 2 * 86400000))]);
+  // The app is open now: today (server time, never the beats' device times) counts for the Streak Bonus.
+  await streak.checkIn(req.profileId);
   res.json({ counted, ignored });
 });
 

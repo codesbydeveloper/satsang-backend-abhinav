@@ -16,6 +16,7 @@ module.exports = {
   adminResendLimiter: make(15 * 60 * 1000, 10),   // admin resend-otp (per IP; each login also allows only 5 resends)
   adminRefreshLimiter: make(15 * 60 * 1000, 60),  // admin refresh (per IP)
   adminInviteLimiter: make(15 * 60 * 1000, 20),   // public invite check / accept-invite (per IP)
+  feedbackLimiter: make(60 * 60 * 1000, 20, 'FEEDBACK_RATE_LIMITED'),   // POST /feedback (per IP; the account limit is in the route)
   sheetExportLimiter: make(60 * 60 * 1000, 30),   // GET /export/sheet (Google Sheet sync, per IP)
   generalLimiter: make(60 * 1000, 300),
 };

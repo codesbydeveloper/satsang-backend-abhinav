@@ -12,11 +12,12 @@ const { AGE_GROUPS } = require('../utils/ageGroup');
 const { etDate, TZ } = require('../utils/time');
 const { requestDeletion } = require('../utils/deletionRequests');
 const { studentSparks } = require('../utils/studentStatus');
+const { FEATURES, donateUrl } = require('../utils/home');
 
 const router = express.Router();
 
 // Startup config for the app: minimum supported version gate + authoritative server time.
-router.get('/meta/config', (_req, res) => {
+router.get('/meta/config', async (_req, res) => {
   const now = new Date();
   res.json({
     minAppVersion: config.minAppVersion, privacyPolicyVersion: config.privacyPolicyVersion,
@@ -25,6 +26,8 @@ router.get('/meta/config', (_req, res) => {
     serverTimeUtc: now.toISOString(), gameDay: etDate(now), gameTimeZone: TZ,
     // Student status question: "" = no interest form (the app hides the button)
     studentInterestFormUrl: config.studentInterestFormUrl, studentSparks: studentSparks(),
+    // Home tab: Donate button ("" = hidden) and the features shown as "Coming Soon" in V1
+    donateUrl: (await donateUrl()).value, features: FEATURES,
   });
 });
 

@@ -12,6 +12,8 @@ const { ageOn, ageGroupForDob } = require('../utils/ageGroup');
 const { profileView, loadProfiles, withSparks, profileById } = require('../utils/profiles');
 const { settleAccountRewards } = require('../services/accountRewards');
 const sparks = require('../services/sparks');
+const dailySpin = require('../services/dailySpin');
+const streak = require('../services/streak');
 const { signAccessToken } = require('../utils/tokens');
 const { etDate } = require('../utils/time');
 const { deleteChildProfile } = require('../utils/accountDeletion');
@@ -42,6 +44,7 @@ router.post('/activity', validate(z.object({ seconds: z.number().int().min(1).ma
     `INSERT INTO profile_daily_activity (profile_id, game_day, active_seconds) VALUES (?,?,?)
      ON DUPLICATE KEY UPDATE active_seconds = LEAST(active_seconds + VALUES(active_seconds), 86400)`,
     [req.profileId, etDate(), req.body.seconds]);
+  await streak.checkIn(req.profileId);   // the app is open: today counts for the Streak Bonus (once per game day)
   res.json({ ok: true });
 });
 
@@ -161,6 +164,49 @@ router.get('/:id/sparks/history', validate(idParam, 'params'), validate(historyQ
   const p = await sparksProfile(req);
   const h = await sparks.getHistory(p.id, req.validated.query);
   res.json({ profileId: p.id, ...h, items: h.items.map(sparks.appTxView) });
+});
+
+// ---- Home tab (Milestone 2, chunk 2.3A, contract 6.7 + 8.3): Daily Spark Spin + Streak Bonus ----
+// Reading follows the Sparks rules above. Spinning, checking in and claiming are for the profile that is PLAYING on
+// this device (the session's active profile): a parent in the parent area cannot spin or keep a streak for a child.
+async function playingProfile(req) {
+  const p = await ownedProfile(req);
+  if (req.profileId !== p.id) throw forbidden('PROFILE_NOT_ACTIVE', 'Only the profile that is playing on this device can do this');
+  return p;
+}
+const txBody = z.object({ transactionId: z.string().trim().min(1).max(64) });
+
+// { available, nextAvailableAt, lastSpinAt, segments }: available 24 h after the last successful spin (rolling).
+router.get('/:id/spin', validate(idParam, 'params'), async (req, res) => {
+  const p = await sparksProfile(req);
+  res.json({ profileId: p.id, ...(await dailySpin.getStatus(p.id)) });
+});
+
+// The server picks the segment (weighted) and credits the Sparks (ledger type daily_spin). Same transactionId again →
+// the first result (200, duplicate: true). Not available yet → 409 SPIN_NOT_AVAILABLE { nextAvailableAt }.
+router.post('/:id/spin', validate(idParam, 'params'), validate(txBody), async (req, res) => {
+  const p = await playingProfile(req);
+  const r = await dailySpin.spin(p.id, req.body.transactionId);
+  res.status(r.duplicate ? 200 : 201).json({ profileId: p.id, ...r });
+});
+
+// { currentStreak, unclaimed, lastActiveDay, ... } on America/New_York game days. Read only.
+router.get('/:id/streak', validate(idParam, 'params'), async (req, res) => {
+  const p = await sparksProfile(req);
+  res.json({ profileId: p.id, ...(await streak.getStreak(p.id)) });
+});
+
+// The app opened (Home tab): counts today once. The activity heartbeat does the same for the active profile.
+router.post('/:id/streak/check-in', validate(idParam, 'params'), async (req, res) => {
+  const p = await playingProfile(req);
+  res.json({ profileId: p.id, ...(await streak.checkIn(p.id)) });
+});
+
+// Credits the unclaimed bonus (ledger type streak) and resets ONLY the unclaimed amount; the streak keeps counting.
+router.post('/:id/streak/claim', validate(idParam, 'params'), validate(txBody), async (req, res) => {
+  const p = await playingProfile(req);
+  const r = await streak.claim(p.id, req.body.transactionId);
+  res.status(r.duplicate ? 200 : 201).json({ profileId: p.id, ...r });
 });
 
 // Delete one child profile and all its data with the Parent PIN (contract 3.4); the parent account and the other
