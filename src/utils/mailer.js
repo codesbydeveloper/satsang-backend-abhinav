@@ -82,7 +82,15 @@ async function sendMail({ to, subject, text, html }) {
 const CODE_MINUTES = 15;   // app verification / reset codes: utils/emailCodes.js uses this same value for expires_at
 const NO_SHARE = '🔒 Please do not share this code with anyone.';
 
-/** Client content (Part A). The code is on its own line after "CODE:" so it is easy to extract from the text part. */
+/**
+ * Code emails are shaped so Gmail shows its built-in "Copy code" box (no button or script in the email): the subject
+ * starts with the code ("<CODE> is your Satsang Spark … code"), the text part opens with "Your Satsang Spark … code is
+ * <CODE>.", and the code is plain digits everywhere (one text element in the HTML; its spacing is CSS letter-spacing).
+ */
+const codeSubject = (code, what) => `${code} is your Satsang Spark ${what}`;
+const codeLine = (code, what) => `Your Satsang Spark ${what} is ${code}.`;
+
+/** Client content (Part A). The code is also on its own line after "CODE:" so it is easy to extract from the text part. */
 function sendVerificationCode(to, code) {
   const title = '🙏 Welcome to Satsang Spark!';
   const welcome = "We're excited to have you join us!";
@@ -91,8 +99,10 @@ function sendVerificationCode(to, code) {
   const ignore = "If you didn't request this code, you can safely ignore this email.";
   return sendMail({
     to,
-    subject: '🙏 Welcome to Satsang Spark – your verification code',
-    text: `${title}
+    subject: codeSubject(code, 'verification code'),
+    text: `${codeLine(code, 'verification code')}
+
+${title}
 
 ${welcome}
 
@@ -117,8 +127,10 @@ function sendPasswordResetCode(to, code) {
   const ignore = "If you didn't request this code, you can safely ignore this email. Your password stays the same.";
   return sendMail({
     to,
-    subject: 'Reset your Satsang Spark password',
-    text: `${intro}
+    subject: codeSubject(code, 'password reset code'),
+    text: `${codeLine(code, 'password reset code')}
+
+${intro}
 
 ${label}
 ${code}
@@ -154,8 +166,8 @@ const sendAccountDeletedEmail = (to) => sendMail({
 /** Admin Panel login code (second login step). Fixed text + the code only: no other data. */
 const sendAdminLoginCode = (to, code) => sendMail({
   to,
-  subject: 'Your Satsang Spark admin login code',
-  text: `Your login code is ${code}. It expires in 10 minutes. If you didn't try to log in, change your password.`,
+  subject: codeSubject(code, 'admin login code'),
+  text: `${codeLine(code, 'admin login code')} It expires in 10 minutes. If you didn't try to log in, change your password.`,
   html: brandedHtml({
     title: 'Your admin login code',
     blocks: [{ label: 'Your login code:' }, { code }, { p: 'It expires in 10 minutes.' }, { small: "If you didn't try to log in, change your password." }],

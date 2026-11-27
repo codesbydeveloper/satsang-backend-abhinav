@@ -33,8 +33,10 @@ test('the logo URL is PUBLIC_BASE_URL + /static/email-logo.png (default http://l
 test('verification email: the client\'s exact subject and content, 15 minutes, code easy to extract', async () => {
   await mailer.sendVerificationCode('a@example.org', '482913');
   const m = last();
-  assert.equal(m.subject, '🙏 Welcome to Satsang Spark – your verification code');
-  assert.equal(m.text, `🙏 Welcome to Satsang Spark!
+  assert.equal(m.subject, '482913 is your Satsang Spark verification code');
+  assert.equal(m.text, `Your Satsang Spark verification code is 482913.
+
+🙏 Welcome to Satsang Spark!
 
 We're excited to have you join us!
 
@@ -98,10 +100,10 @@ Wishing you all the best.
 test('every email is sent as plain text + the shared branded layout with the logo', async () => {
   const at = new Date('2026-11-23T15:04:05Z');
   const sends = [
-    ['🙏 Welcome to Satsang Spark – your verification code', () => mailer.sendVerificationCode('a@example.org', '123456'), ['123456']],
-    ['Reset your Satsang Spark password', () => mailer.sendPasswordResetCode('a@example.org', '654321'), ['654321', 'This code expires in 15 minutes.']],
+    ['123456 is your Satsang Spark verification code', () => mailer.sendVerificationCode('a@example.org', '123456'), ['123456']],
+    ['654321 is your Satsang Spark password reset code', () => mailer.sendPasswordResetCode('a@example.org', '654321'), ['654321', 'This code expires in 15 minutes.']],
     ['🙏 Satsang Spark – Account Deletion Confirmation', () => mailer.sendAccountDeletedEmail('a@example.org'), ['successfully deleted']],
-    ['Your Satsang Spark admin login code', () => mailer.sendAdminLoginCode('a@example.org', '111222'), ['111222', 'It expires in 10 minutes.']],
+    ['111222 is your Satsang Spark admin login code', () => mailer.sendAdminLoginCode('a@example.org', '111222'), ['111222', 'It expires in 10 minutes.']],
     ["You've been invited to the Satsang Spark Admin Panel",
       () => mailer.sendAdminInvite('a@example.org', { name: 'Priya', invitedBy: 'boss', role: 'content_editor', link: 'http://localhost:5173/accept-invite?token=abc_DEF-123' }),
       ['Hello Priya,', 'as Content Editor.', 'href="http://localhost:5173/accept-invite?token=abc_DEF-123"', 'Choose your password']],
@@ -120,6 +122,25 @@ test('every email is sent as plain text + the shared branded layout with the log
   // the reset code is extractable the same way as the verification code
   await mailer.sendPasswordResetCode('a@example.org', '654321');
   assert.equal(last().text.match(/CODE:\n(\d{6})\n/)[1], '654321');
+});
+
+test('code emails are Gmail "Copy code" friendly: code-first subject, clear first text line, plain digits, one HTML element', async () => {
+  const cases = [
+    [() => mailer.sendVerificationCode('a@example.org', '602032'), 'verification code'],
+    [() => mailer.sendPasswordResetCode('a@example.org', '602032'), 'password reset code'],
+    [() => mailer.sendAdminLoginCode('a@example.org', '602032'), 'admin login code'],
+  ];
+  for (const [send, what] of cases) {
+    await send();
+    const m = last();
+    assert.equal(m.subject, `602032 is your Satsang Spark ${what}`);
+    assert.equal(m.text.split('\n')[0].replace(/ It expires.*$/, ''), `Your Satsang Spark ${what} is 602032.`);
+    assert.ok(!/6\s+0\s*2|0\s+3\s*2/.test(m.text), `${what}: digits not spaced in text`);
+    const box = m.html.match(/<p style="([^"]*)">602032<\/p>/);
+    assert.ok(box, `${what}: code is one text element in the HTML`);
+    assert.match(box[1], /letter-spacing:\d+px/);
+    assert.equal(m.html.split('602032').length - 1, 1, `${what}: code appears once in the HTML, not split`);
+  }
 });
 
 test('an email sent without its own HTML still gets the layout (subject as title, text paragraphs, escaped)', async () => {

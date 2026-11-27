@@ -66,8 +66,8 @@ async function makeAdmin(email, role = 'full_admin', password = 'AdminPassphrase
 
 /** The 6-digit admin login code in the latest email to `to`. */
 const lastAdminCode = (to) => {
-  const m = [...outbox].reverse().find((x) => x.to === to && x.subject === 'Your Satsang Spark admin login code');
-  return m && m.text.match(/Your login code is (\d{6})\./)[1];
+  const m = [...outbox].reverse().find((x) => x.to === to && /^\d{6} is your Satsang Spark admin login code$/.test(x.subject));
+  return m && m.text.match(/^Your Satsang Spark admin login code is (\d{6})\./)[1];
 };
 
 /** Full admin login: password, then the emailed code. Returns { token, admin }. */

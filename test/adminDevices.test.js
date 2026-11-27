@@ -11,14 +11,14 @@ after(() => h.pool.end());
 const CHROME_WIN = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const SAFARI_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15';
 const ALERT = 'Satsang Spark Admin – new sign-in';
-const CODE_SUBJECT = 'Your Satsang Spark admin login code';
+const CODE_SUBJECT = /^\d{6} is your Satsang Spark admin login code$/;
 
 const login = (a, extra = {}, ua = CHROME_WIN) =>
   api().post('/api/v1/admin/auth/login').set('User-Agent', ua).send({ email: a.email, password: a.password, ...extra });
 const verify = (challengeToken, code, extra = {}, ua = CHROME_WIN) =>
   api().post('/api/v1/admin/auth/verify-otp').set('User-Agent', ua).send({ challengeToken, code, ...extra });
 const refresh = (refreshToken) => api().post('/api/v1/admin/auth/refresh').send({ refreshToken });
-const codeMails = (to) => h.outbox.filter((m) => m.to === to && m.subject === CODE_SUBJECT).length;
+const codeMails = (to) => h.outbox.filter((m) => m.to === to && CODE_SUBJECT.test(m.subject)).length;
 const alerts = () => h.outbox.filter((m) => m.subject === ALERT);
 const actions = async () => (await h.query('SELECT action, details FROM audit_log ORDER BY id'));
 

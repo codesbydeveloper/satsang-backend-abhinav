@@ -17,9 +17,10 @@ test('verification codes are stored to expire 15 minutes after sending, and stop
   const email = 'ravi@example.org';
   assert.equal((await register(email)).status, 201);
   const mail = h.outbox.find((m) => m.to === email);
-  assert.equal(mail.subject, '🙏 Welcome to Satsang Spark – your verification code');
   assert.ok(mail.text.includes('⏳ This code expires in 15 minutes.'));
   const code = h.lastCode(email);
+  assert.equal(mail.subject, `${code} is your Satsang Spark verification code`);
+  assert.ok(mail.text.startsWith(`Your Satsang Spark verification code is ${code}.\n`));
   assert.match(code, /^\d{6}$/);
 
   const row = (await h.query("SELECT * FROM email_codes WHERE purpose = 'verify_email' ORDER BY id DESC LIMIT 1"))[0];
@@ -44,7 +45,9 @@ test('password reset codes also expire after 15 minutes', async () => {
   await h.adultLogin(email, 'ravi_k');
   assert.equal((await api().post('/api/v1/auth/forgot-password').send({ email })).status, 200);
   const mail = [...h.outbox].reverse().find((m) => m.to === email);
-  assert.equal(mail.subject, 'Reset your Satsang Spark password');
+  const code = mail.text.match(/CODE:\n(\d{6})\n/)[1];
+  assert.equal(mail.subject, `${code} is your Satsang Spark password reset code`);
+  assert.ok(mail.text.startsWith(`Your Satsang Spark password reset code is ${code}.\n`));
   const row = (await h.query("SELECT * FROM email_codes WHERE purpose <> 'verify_email' ORDER BY id DESC LIMIT 1"))[0];
   const left = minutesLeft(row);
   assert.ok(left > 14.9 && left <= 15, String(left));
